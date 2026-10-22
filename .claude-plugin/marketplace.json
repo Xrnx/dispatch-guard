@@ -1,0 +1,6 @@
+{
+  "name": "dispatch-guard",
+  "description": "Claude Code mod that reminds the main thread to hand off work after 3 tool calls in a turn.",
+  "owner": { "name": "Xrnx" },
+  "plugins": [{ "name": "dispatch-guard", "source": "./" }]
+}
