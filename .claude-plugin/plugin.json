@@ -1,1 +1,1 @@
-{ "name": "dispatch-guard", "version": "0.2.0", "description": "Reminds the orchestrator dispatcher to hand off work after 3 tool calls in a turn.", "author": { "name": "Xrnx" } }
+{ "name": "dispatch-guard", "version": "0.2.1", "description": "Reminds the orchestrator dispatcher to hand off work after 3 tool calls in a turn.", "author": { "name": "Xrnx" } }
