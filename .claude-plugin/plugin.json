@@ -1,1 +1,1 @@
-{ "name": "dispatch-guard", "version": "0.3.4", "description": "Loads the orchestrator skill at the start of every chat and reminds the dispatcher to hand off work after 3 tool calls in a turn.", "author": { "name": "Xrnx" }, "types": "./types/index.d.ts" }
+{ "name": "dispatch-guard", "version": "0.3.5", "description": "Loads the orchestrator skill at the start of every chat and reminds the dispatcher to hand off work after 3 tool calls in a turn.", "author": { "name": "Xrnx" }, "types": "./types/index.d.ts" }

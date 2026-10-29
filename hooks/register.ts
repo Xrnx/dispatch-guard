@@ -126,6 +126,7 @@ async function openCount($: EngineInterface): Promise<number> {
 export const register: Register = on => {
   let count = 0
   let handoffTurn = false // the handoff skill was loaded this main turn: no 4th-call reminder
+  let pendingHandoff = false // a /handoff slash command was submitted; its turn is a handoff turn
   let proof = false // a launch id came back this main turn
   let stampFired = false // the board-timestamp lint went out this main turn
   let idleFired = false // the idle-guard reminder went out this main turn
@@ -136,7 +137,10 @@ export const register: Register = on => {
   // Once per chat: attach the orchestrator instruction to the first prompt, before the model's first reply.
   // Re-arms on a new session id (startup, /clear), so it needs no SessionStart hook.
   on('prompt.submit', async ($, e, next) => {
-    if (e.command !== undefined) return next(e)
+    if (e.command !== undefined) {
+      if (/(^|:)handoff$/.test(e.command.name)) pendingHandoff = true
+      return next(e)
+    }
     await close($, finished(e.text)) // a notification may arrive as a submitted prompt
     if (carry !== undefined) {
       e = { ...e, context: [...(e.context ?? []), carry] }
@@ -156,7 +160,8 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
       count = 0
-      handoffTurn = false
+      handoffTurn = pendingHandoff
+      pendingHandoff = false
       proof = false
       idleFired = false
       stampFired = false

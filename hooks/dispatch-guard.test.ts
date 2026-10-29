@@ -25,6 +25,20 @@ test('no 4th-call reminder in a turn that loaded the handoff skill', async ($, o
   }
 })
 
+test('a /handoff slash command makes its turn a handoff turn; the next turn re-arms', async ($, on) => {
+  on('tool.call', () => ({ result: {} }))
+  on('prompt.submit', (_$: any, e: any) => e)
+  on('turn.start', (_$: any, e: any) => e)
+  await $.prompt.submit({ text: '', command: { name: 'anthropic-skills:handoff', args: '' } } as any)
+  await $.turn.start({ text: '', turnId: 'h1' } as any)
+  for (let i = 0; i < 5; i++) {
+    expect(ctx(await $.tool.call({ tool: 'Read', file_path: '/x' } as any))).not.toMatch(TURN)
+  }
+  await $.turn.start({ text: 'hi', turnId: 'h2' } as any)
+  for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Read', file_path: '/x' } as any)
+  expect(ctx(await $.tool.call({ tool: 'Read', file_path: '/x' } as any))).toMatch(TURN)
+})
+
 test('flags long-looking foreground Bash, not background Bash', async ($, on) => {
   on('tool.call', () => ({ result: {} }))
   expect(ctx(await $.tool.call({ tool: 'Bash', command: 'npm test' } as any))).toMatch(BASH)
