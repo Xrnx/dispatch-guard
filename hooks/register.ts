@@ -105,6 +105,11 @@ export const bigResult = (ran: Ran): number => {
   const t = ran.text ?? (typeof ran.result === 'string' ? ran.result : JSON.stringify(ran.result ?? ''))
   return t.length > BIG ? t.length : 0
 }
+// Relay (W2-7): a subagent's context grows ~2k tokens per tool call and every call re-reads it. Backtest
+// (improve/plan/wave2/relay/backtest.py, 31 agents): handing over to a fresh agent after RELAY_AT calls, relay cost
+// included, saves ~9% of cost-weighted agent spend, flat from 35 to 50 calls; 50 needs the fewest relays.
+export const RELAY_AT = 50
+const RELAY_MSG = `${RELAY_AT} tool calls: context is now costly to re-read. Finish the current step, update <workdir>/progress.md (done, next, files, exact commands), then end with report "relay: <path to progress.md>" so main resumes you fresh.`
 const BASH_MSG = 'Foreground Bash looks long-running (node/python/npm test/playwright/sleep) — use run_in_background or a background agent.'
 const RUNNING_MSG = '(running) claimed but nothing launched this turn — start it or say not started.'
 const PARKED_MSG = 'Fix named but not started — dispatch it this turn (agent/edit/publish) or mark (needs you).'
@@ -462,6 +467,7 @@ async function corrLog($: EngineInterface, text: string): Promise<void> {
 
 export const register: Register = on => {
   let count = 0
+  const agentCalls = new Map<string, number>() // tool calls per subagent loop, for the relay note
   let turnFired = false // the 4th-call reminder fires at most once per turn
   let handoffTurn = false // the handoff skill was loaded this main turn: no 4th-call reminder
   let pendingHandoff = false // a /handoff slash command was submitted; its turn is a handoff turn
@@ -560,10 +566,17 @@ export const register: Register = on => {
 
   // Warn only: always run the tool, then append a reminder to its result.
   on('tool.call', async ($, e, next) => {
-    if (e.agentId !== undefined) { // subagents: only the big-result warning, never counted or blocked
+    if (e.agentId !== undefined) { // subagents: big-result warning + relay note at call RELAY_AT, never blocked
+      const n = (agentCalls.get(e.agentId) ?? 0) + 1
+      agentCalls.set(e.agentId, n)
+      if (agentCalls.size > KEEP_LAUNCHES) agentCalls.delete(agentCalls.keys().next().value!)
       const r = await next(e)
-      const n = r.deny === undefined && !r.isError ? bigResult(r) : 0
-      return n > 0 ? { ...r, context: [...(r.context ?? []), BIG_MSG(n)] } : r
+      if (r.deny !== undefined) return r
+      const add: string[] = []
+      const big = r.isError ? 0 : bigResult(r)
+      if (big > 0) add.push(BIG_MSG(big))
+      if (n === RELAY_AT) add.push(RELAY_MSG)
+      return add.length > 0 ? { ...r, context: [...(r.context ?? []), ...add] } : r
     }
     const notes: string[] = []
     // A handoff resume/write turn is a short fixed sequence; handing it to an agent only slows it.
