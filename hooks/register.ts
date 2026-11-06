@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { CARD, SECTIONS } from './orchestrator-card'
+import { CARD } from './orchestrator-card'
 
 const EXEMPT = new Set(['Agent', 'SendMessage', 'TaskCreate', 'TaskUpdate', 'Read', 'Glob', 'Grep', 'ToolSearch', 'TaskGet', 'TaskList'])
 const MEMORY_READ = /(^|__)memory_read$/
@@ -32,7 +32,7 @@ export const fnv8 = (t: string): string => {
   }
   return h.toString(16).padStart(8, '0')
 }
-type Live = { text?: string; dir?: string; files: number; error?: string }
+type Live = { text?: string; files: number; error?: string }
 async function liveSkill($: EngineInterface): Promise<Live> {
   let best = -1
   const out: Live = { files: 0 }
@@ -45,7 +45,7 @@ async function liveSkill($: EngineInterface): Promise<Live> {
       out.files += 1
       if (m <= best && out.text !== undefined) continue
       const t = await $.fs.read(p)
-      if (typeof t === 'string' && t.trim().length > 0) { best = m; out.text = t; out.dir = `${SKILLS_ROOT}/${name}/orchestrator` }
+      if (typeof t === 'string' && t.trim().length > 0) { best = m; out.text = t }
     } catch (err) { out.error ??= String(err).slice(0, 200) }
   }
   return out
@@ -53,25 +53,36 @@ async function liveSkill($: EngineInterface): Promise<Live> {
 const CARD_TAIL = "\n\nIf this card is absent in your context, Skill-load 'orchestrator'."
 const cardText = (tag: string, source: string, body: string): string =>
   `Orchestrator card (${tag}, ${source}) — this is the skill content; follow it now:\n\n${body}${CARD_TAIL}`
-// Tiered card: a core naming on-demand section files (`name.md`) under `{SKILL_DIR}`. All named files on disk →
-// the token becomes their dir and the model Reads each on its trigger; any missing (or no dir) → the embedded
-// sections are inlined after the core, so a section is never unreachable. A core with no token passes unchanged.
+// Tiered card: one SKILL.md (it ships whole via skill saves) holds the core, then each on-demand section after a
+// `<!-- section: name.md -->` marker. A hook that knows nothing of tiers injects it whole, and the core's
+// `{SKILL_DIR}` line then says every section is inline. This hook writes the sections to `<plugin root>/cards/`
+// (read back to verify), injects the core with the token set to that dir, and the model Reads each on its trigger.
+// Any write/read failure → the whole text goes out unchanged, so a section is never unreachable.
 export const DIR_TOKEN = '{SKILL_DIR}'
-export const sectionNames = (body: string): string[] => [...new Set([...body.matchAll(/`([\w-]+\.md)`/g)].map(m => m[1]).filter(n => n !== 'SKILL.md'))]
-export const inlineSections = (body: string): string =>
-  [body.split(DIR_TOKEN).join('inlined below, no Read needed'),
-    ...sectionNames(body).map(n => `--- ${n} (inlined) ---\n${SECTIONS[n] ?? '(missing from this build: Skill-load \'orchestrator\' and Read it)'}`)].join('\n\n')
-async function placeSections($: EngineInterface, body: string, dir: string | undefined): Promise<{ body: string; sections: 'none' | 'files' | 'inlined' }> {
-  if (!body.includes(DIR_TOKEN)) return { body, sections: 'none' }
-  if (dir !== undefined) {
-    let ok = true
-    for (const n of sectionNames(body)) { try { ok &&= await $.fs.exists(`${dir}/${n}`) } catch { ok = false } }
-    if (ok) return { body: body.split(DIR_TOKEN).join(dir), sections: 'files' }
-  }
-  return { body: inlineSections(body), sections: 'inlined' }
+const MARK = /^<!-- section: ([\w-]+\.md) -->\n/m
+export const splitCard = (body: string): { core: string; sections: [string, string][] } => {
+  const parts = body.split(new RegExp(MARK.source, 'gm'))
+  const sections: [string, string][] = []
+  for (let i = 1; i + 1 < parts.length; i += 2) sections.push([parts[i], parts[i + 1].replace(/\n+$/, '\n')])
+  return { core: parts[0].replace(/\n+$/, '\n'), sections }
+}
+export type Placed = { body: string; sections: 'none' | 'files' | 'inlined'; dir?: string }
+async function placeSections($: EngineInterface, body: string): Promise<Placed> {
+  const { core, sections } = splitCard(body)
+  if (sections.length === 0 || !core.includes(DIR_TOKEN)) return { body, sections: 'none' }
+  try {
+    const dir = `${$.plugin.root}/cards`
+    for (const [n, t] of sections) {
+      const p = `${dir}/${n}`
+      const have = await $.fs.read(p).catch(() => undefined)
+      if (have !== t) await $.fs.write(p, t)
+      if ((await $.fs.read(p)) !== t) throw new Error(`verify ${n}`)
+    }
+    return { body: core.split(DIR_TOKEN).join(dir), sections: 'files', dir }
+  } catch { return { body, sections: 'inlined' } }
 }
 const embeddedBody = (): string => { try { return stripFrontmatter(CARD) } catch { return CARD } }
-export const fallbackCard = (): string => { const b = embeddedBody(); return cardText(fnv8(b), 'embedded', b.includes(DIR_TOKEN) ? inlineSections(b) : b) }
+export const fallbackCard = (): string => { const b = embeddedBody(); return cardText(fnv8(b), 'embedded', b) }
 export type CardInfo = { at: string; source: 'live' | 'embedded'; tag: string; error?: string; root: string; files: number; sections?: 'none' | 'files' | 'inlined' }
 // Never throws: any fs failure (or anything else) falls back to the embedded card.
 async function cardMsg($: EngineInterface): Promise<{ msg: string; info: CardInfo }> {
@@ -82,8 +93,8 @@ async function cardMsg($: EngineInterface): Promise<{ msg: string; info: CardInf
   try { body = stripFrontmatter(live.text ?? CARD) } catch (err) { body = embeddedBody(); source = 'embedded'; live.error ??= String(err).slice(0, 200) }
   let tag = '00000000'
   try { tag = fnv8(body) } catch {}
-  let placed: { body: string; sections: 'none' | 'files' | 'inlined' }
-  try { placed = await placeSections($, body, source === 'live' ? live.dir : undefined) } catch { placed = { body: inlineSections(body), sections: 'inlined' } }
+  let placed: Placed
+  try { placed = await placeSections($, body) } catch { placed = { body, sections: 'inlined' } }
   const info: CardInfo = { at: new Date().toISOString(), source, tag, root: SKILLS_ROOT, files: live.files, sections: placed.sections }
   if (live.error !== undefined) info.error = live.error
   return { msg: cardText(tag, source, placed.body), info }
