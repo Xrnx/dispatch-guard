@@ -344,6 +344,73 @@ async function openCount($: EngineInterface): Promise<number> {
   return ((await $.state.get(openLaunches)).value ?? []).length
 }
 
+// corr-log (0.4.5): a J prompt that corrects or re-asks after an answer is logged as a scoreboard row at
+// zero model tokens. Rows queue in $.store (container-local) and flush to the Claude Scoreboard's
+// "corrections" collection through ArtifactData only when the permission check already says allow
+// (after this session approved a database write), so the hook never raises a prompt for J.
+export const SCOREBOARD_URL = 'https://claude.ai/artifact/9eLvFVYqsp5CwzFY64V3pK'
+const CORR_KEY = 'corrLog'
+const CORR_KEEP = 200
+const Q = "['’]"
+const CORRECTING = new RegExp(
+  "^(why|where( is\\b|\\s*\\??$)|just\\b|stop\\b|and\\s|but\\s|i mean\\b|what about\\b|can you not\\b|you (were|are|did|didn" + Q + "?t|forgot|missed|ignored|keep)\\b)"
+  + "|\\b(verified where|are you sure|is it really|really mean|why (did|do) you|i (just |already )?(told|said)|repeat(ing)? myself|no,? it" + Q + "?s a question|not what i (asked|said|meant)"
+  + "|what is (para|paragraph|cl|clause|s|section|sch|schedule)\\b|that" + Q + "?s (wrong|not right)|what the (hell|heck|f)|supposed to|in future|mix(ed)? up|except for|not just\\b|too (long|short|verbose|wordy)\\b|shorten\\b|\\bpaste\\b"
+  + "|you can google|look (it )?up|\\bagain\\b|does(n" + Q + "?t| not)? have\\b|(i|we) (don" + Q + "?t|do not) (have|need|want|use)\\b|can" + Q + "?t get\\b)", 'i')
+// Only the opening of a prompt is read: a long pasted brief is no correction.
+export const correcting = (text: string): boolean => CORRECTING.test(text.trim().slice(0, 160))
+const CATEGORIES: [RegExp, string][] = [
+  [/verified where|are you sure|is it really|really mean|why (did|do) you|why do you say|what is (para|cl|s|sch)|^where\b/i, 'unverified claim'],
+  [/too (long|short|verbose|wordy)|shorten|eta|slow/i, 'slow/over-long'],
+  [/paste|format|icon|mix(ed)? up/i, 'format/style miss'],
+  [/google|look (it )?up|supposed to|memori[sz]ed/i, "didn't check stored info"],
+  [/^(just|and|but|what about|i mean)\b|except for|not just|only|question|i (just |already )?(told|said)|repeat/i, 'wrong scope'],
+]
+export const corrCategory = (text: string): string => CATEGORIES.find(([re]) => re.test(text))?.[1] ?? 'unclassified'
+// Not J typing: agent messages, task notifications, hook continuations, slash commands.
+const NOT_J = /^\s*(<|\[dispatch-guard\]|Another Claude session|Stop hook feedback|The files from earlier)/
+export type CorrRow = { date: string; chat: string; words: string; wrong: string; category: string; covered: boolean; rule: string; count: number; auto: true; session: string }
+export const corrRow = (text: string, session: string, chat: string, now: number): CorrRow => ({
+  date: new Date(now + 8 * 3_600_000).toISOString().slice(0, 10), // SGT calendar day
+  chat: chat.slice(0, 60), words: text.trim().slice(0, 300), wrong: '(auto-logged: triage)', category: corrCategory(text),
+  covered: false, rule: 'auto-logged; triage', count: 1, auto: true, session,
+})
+const corrId = (r: CorrRow, now: number): string => `auto-${r.session.slice(0, 8)}-${now.toString(36)}`
+async function corrQueue($: EngineInterface): Promise<{ id: string; data: CorrRow }[]> {
+  const v = await $.store.get(CORR_KEY)
+  return Array.isArray(v) ? v as { id: string; data: CorrRow }[] : []
+}
+// Flush queued rows in one batch, only where the check already allows a database write.
+let corrBusy = false // the flush's own ArtifactData call passes through this plugin's tool.call hook
+export async function corrFlush($: EngineInterface): Promise<number> {
+  if (corrBusy) return 0
+  corrBusy = true
+  try { return await corrSend($) } finally { corrBusy = false }
+}
+async function corrSend($: EngineInterface): Promise<number> {
+  const queue = await corrQueue($)
+  if (queue.length === 0) return 0
+  const writes = queue.slice(0, 50).map(q => ({ op: 'set', collection: 'corrections', doc_id: q.id, data: q.data }))
+  const input = { action: 'batch', url: SCOREBOARD_URL, writes }
+  const { decision } = await $.tool.check({ tool: 'ArtifactData', input } as never)
+  if (decision !== 'allow') return 0
+  const ran = await $.tool.call({ tool: 'ArtifactData', ...input } as never) as { deny?: string; isError?: boolean }
+  if (ran.deny !== undefined || ran.isError) return 0
+  const sent = new Set(writes.map(w => w.doc_id))
+  await $.store.set(CORR_KEY, (await corrQueue($)).filter(q => !sent.has(q.id)))
+  return writes.length
+}
+async function corrLog($: EngineInterface, text: string): Promise<void> {
+  if (NOT_J.test(text) || !correcting(text)) return
+  const msgs = await $.session.messages()
+  if (!Array.isArray(msgs) || !msgs.some(m => m.role === 'assistant')) return // nothing to correct yet
+  const chat = msgs.find(m => m.role === 'user' && !NOT_J.test(m.text))?.text.split('\n')[0] ?? ''
+  const now = await $.clock.now()
+  const row = corrRow(text, await $.session.id(), chat, now)
+  await $.store.set(CORR_KEY, [...await corrQueue($), { id: corrId(row, now), data: row }].slice(-CORR_KEEP))
+  await corrFlush($).catch(() => 0)
+}
+
 export const register: Register = on => {
   let count = 0
   let turnFired = false // the 4th-call reminder fires at most once per turn
@@ -373,6 +440,7 @@ export const register: Register = on => {
       if (/(^|:)handoff$/.test(e.command.name)) pendingHandoff = true
       return next(e)
     }
+    if (!e.isMeta) await corrLog($, e.text).catch(() => undefined)
     await close($, finished(e.text)) // a notification may arrive as a submitted prompt
     if (carry !== undefined) {
       e = { ...e, context: [...(e.context ?? []), carry] }
@@ -472,7 +540,10 @@ export const register: Register = on => {
     if (ran.deny === undefined && !ran.isError) {
       if (writes(e.tool)) wrote = true
       if (looksUp(e.tool)) looked = true
-      if (ARTIFACT_DATA.test(e.tool) && ['set', 'update', 'batch'].includes(String((e as Record<string, unknown>).action))) boarded = true
+      if (ARTIFACT_DATA.test(e.tool) && ['set', 'update', 'batch'].includes(String((e as Record<string, unknown>).action))) {
+        boarded = true
+        await corrFlush($).catch(() => 0) // the session's own write just passed the check: queued rows can follow
+      }
       if (AGENT_TOOLS.has(e.tool) || editsLedger(e as unknown as Record<string, unknown>)) dispatched = true
       if (e.tool === 'Skill' && ORCH_SKILL.test(String((e as Record<string, unknown>).skill ?? ''))) {
         await $.state.set(orchLoaded, await $.session.id())
