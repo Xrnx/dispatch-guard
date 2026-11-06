@@ -53,9 +53,37 @@ async function liveSkill($: EngineInterface): Promise<Live> {
 const CARD_TAIL = "\n\nIf this card is absent in your context, Skill-load 'orchestrator'."
 const cardText = (tag: string, source: string, body: string): string =>
   `Orchestrator card (${tag}, ${source}) — this is the skill content; follow it now:\n\n${body}${CARD_TAIL}`
+// Tiered card: one SKILL.md (it ships whole via skill saves) holds the core, then each on-demand section after a
+// `<!-- section: name.md -->` marker. A hook that knows nothing of tiers injects it whole, and the core's
+// `{SKILL_DIR}` line then says every section is inline. This hook writes the sections to `<plugin root>/cards/`
+// (read back to verify), injects the core with the token set to that dir, and the model Reads each on its trigger.
+// Any write/read failure → the whole text goes out unchanged, so a section is never unreachable.
+export const DIR_TOKEN = '{SKILL_DIR}'
+const MARK = /^<!-- section: ([\w-]+\.md) -->\n/m
+export const splitCard = (body: string): { core: string; sections: [string, string][] } => {
+  const parts = body.split(new RegExp(MARK.source, 'gm'))
+  const sections: [string, string][] = []
+  for (let i = 1; i + 1 < parts.length; i += 2) sections.push([parts[i], parts[i + 1].replace(/\n+$/, '\n')])
+  return { core: parts[0].replace(/\n+$/, '\n'), sections }
+}
+export type Placed = { body: string; sections: 'none' | 'files' | 'inlined'; dir?: string }
+async function placeSections($: EngineInterface, body: string): Promise<Placed> {
+  const { core, sections } = splitCard(body)
+  if (sections.length === 0 || !core.includes(DIR_TOKEN)) return { body, sections: 'none' }
+  try {
+    const dir = `${$.plugin.root}/cards`
+    for (const [n, t] of sections) {
+      const p = `${dir}/${n}`
+      const have = await $.fs.read(p).catch(() => undefined)
+      if (have !== t) await $.fs.write(p, t)
+      if ((await $.fs.read(p)) !== t) throw new Error(`verify ${n}`)
+    }
+    return { body: core.split(DIR_TOKEN).join(dir), sections: 'files', dir }
+  } catch { return { body, sections: 'inlined' } }
+}
 const embeddedBody = (): string => { try { return stripFrontmatter(CARD) } catch { return CARD } }
 export const fallbackCard = (): string => { const b = embeddedBody(); return cardText(fnv8(b), 'embedded', b) }
-export type CardInfo = { at: string; source: 'live' | 'embedded'; tag: string; error?: string; root: string; files: number }
+export type CardInfo = { at: string; source: 'live' | 'embedded'; tag: string; error?: string; root: string; files: number; sections?: 'none' | 'files' | 'inlined' }
 // Never throws: any fs failure (or anything else) falls back to the embedded card.
 async function cardMsg($: EngineInterface): Promise<{ msg: string; info: CardInfo }> {
   let live: Live = { files: 0 }
@@ -65,9 +93,11 @@ async function cardMsg($: EngineInterface): Promise<{ msg: string; info: CardInf
   try { body = stripFrontmatter(live.text ?? CARD) } catch (err) { body = embeddedBody(); source = 'embedded'; live.error ??= String(err).slice(0, 200) }
   let tag = '00000000'
   try { tag = fnv8(body) } catch {}
-  const info: CardInfo = { at: new Date().toISOString(), source, tag, root: SKILLS_ROOT, files: live.files }
+  let placed: Placed
+  try { placed = await placeSections($, body) } catch { placed = { body, sections: 'inlined' } }
+  const info: CardInfo = { at: new Date().toISOString(), source, tag, root: SKILLS_ROOT, files: live.files, sections: placed.sections }
   if (live.error !== undefined) info.error = live.error
-  return { msg: cardText(tag, source, body), info }
+  return { msg: cardText(tag, source, placed.body), info }
 }
 const BASH_MSG = 'Foreground Bash looks long-running (node/python/npm test/playwright/sleep) — use run_in_background or a background agent.'
 const RUNNING_MSG = '(running) claimed but nothing launched this turn — start it or say not started.'

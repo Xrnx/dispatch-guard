@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { CARD } from './orchestrator-card'
-import { longPoints, unverified, unproven, SKILLS_ROOT, fnv8, scopeCtx, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL } from './register'
+import { longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL } from './register'
 
 const TURN = /4th tool call this turn/
 const BASH = /Foreground Bash looks long-running/
@@ -103,14 +103,16 @@ const fakeSkills = (on: any, files: Record<string, { text: string; mtimeMs: numb
   on('fs.read', (_$: any, e: any) => { const f = at(e.path); if (!f) miss(); return { value: f!.text } })
 }
 const EMBEDDED = stripFrontmatter(CARD)
+// Without a working cards dir the card goes out whole (core + inline sections).
+const SENT = EMBEDDED
 
 test('orchestrator card (skill text) rides the first prompt only, after the reminder', async ($, on) => {
   const h = chat(on)
   fakeSkills(on, undefined)
   await $.prompt.submit({ text: 'test' } as any)
   await $.prompt.submit({ text: 'second' } as any)
-  expect(h.seen[0]).toContain(EMBEDDED)
-  expect(h.seen[0].indexOf(EMBEDDED)).toBeGreaterThan(h.seen[0].search(START))
+  expect(h.seen[0]).toContain(SENT)
+  expect(h.seen[0].indexOf(SENT)).toBeGreaterThan(h.seen[0].search(START))
   expect(h.seen[1]).not.toMatch(/Orchestrator card/)
   expect(h.seen[1]).not.toContain(EMBEDDED)
 })
@@ -132,7 +134,7 @@ test('card: no synced skills dir falls back to the embedded card, tagged embedde
   fakeSkills(on, undefined)
   await $.prompt.submit({ text: 'first' } as any)
   expect(h.seen[0]).toContain(`Orchestrator card (${fnv8(EMBEDDED)}, embedded)`)
-  expect(h.seen[0]).toContain(EMBEDDED)
+  expect(h.seen[0]).toContain(SENT)
 })
 
 test('card: YAML frontmatter is stripped from live and embedded text', async ($, on) => {
@@ -467,7 +469,7 @@ test('card: $.fs.list throwing still injects the embedded card, and lastCard rec
   await $.prompt.submit({ text: 'first' } as any)
   expect(h.seen[0]).toMatch(START)
   expect(h.seen[0]).toContain(`Orchestrator card (${fnv8(EMBEDDED)}, embedded)`)
-  expect(h.seen[0]).toContain(EMBEDDED)
+  expect(h.seen[0]).toContain(SENT)
   expect(h.seen[0]).toContain(TAIL)
   const last = log.find(x => x.key === 'lastCard')?.value as any
   expect(last.source).toBe('embedded')
@@ -520,7 +522,7 @@ test('card: store and fs both throwing still inject once, not again on the next 
   await $.prompt.submit({ text: 'first' } as any)
   await $.prompt.submit({ text: 'second' } as any)
   expect(seen[0]).toMatch(START)
-  expect(seen[0]).toContain(EMBEDDED)
+  expect(seen[0]).toContain(SENT)
   expect(seen[1]).not.toMatch(START)
 })
 
@@ -811,4 +813,50 @@ test('verify-proof: locator, named site and in-chat document count as sources; l
 test('running-proof: "running (Sonnet)" claims a launch like "(running"', () => {
   expect(unproven('**Next:** valuer gets both names — running (Sonnet), ETA 00:05.', false)).toBe(true)
   expect(unproven('Nothing is running now.', false)).toBe(false)
+})
+
+// 0.4.2 tiered card: one SKILL.md, sections after `<!-- section: x.md -->` markers; the hook writes them to
+// <plugin root>/cards/ and injects the core only, or sends the whole text when the cards dir fails.
+const TIERED = '---\nname: orchestrator\n---\n# Core\nDir: `{SKILL_DIR}`. Agents → `dispatch.md`; handover → `handover.md`.\n\n<!-- section: dispatch.md -->\n# D\nbrief rules\n\n<!-- section: handover.md -->\n# H\nblock rules\n'
+const tierFs = (on: any, opts: { failWrite?: boolean } = {}) => {
+  const disk: Record<string, string> = {}
+  const dir = `${SKILLS_ROOT}/s1/orchestrator`
+  const miss = () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) }
+  on('fs.list', (_$: any, e: any) => (e.path === SKILLS_ROOT ? { value: [{ name: 's1', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] } : miss()))
+  on('fs.stat', (_$: any, e: any) => (e.path === `${dir}/SKILL.md` ? { value: { kind: 'file', size: 1, mtimeMs: 1, isLink: false } } : miss()))
+  on('fs.read', (_$: any, e: any) => (e.path === `${dir}/SKILL.md` ? { value: TIERED } : e.path in disk ? { value: disk[e.path] } : miss()))
+  on('fs.write', (_$: any, e: any) => { if (opts.failWrite) throw new Error('EROFS'); disk[e.path] = e.text; return { value: undefined } })
+  return disk
+}
+
+test('tiered card: sections go to <plugin root>/cards, the core alone is injected with the token set to that dir', async ($, on) => {
+  const h = chat(on)
+  const disk = tierFs(on)
+  await $.prompt.submit({ text: 'first' } as any)
+  const dir = Object.keys(disk).find(k => k.endsWith('/cards/dispatch.md'))!.replace(/\/dispatch\.md$/, '')
+  expect(dir).toMatch(/^\/.+\/cards$/)
+  expect(disk[`${dir}/dispatch.md`]).toBe('# D\nbrief rules\n')
+  expect(disk[`${dir}/handover.md`]).toBe('# H\nblock rules\n')
+  expect(h.seen[0]).toContain(`Dir: \`${dir}\``)
+  expect(h.seen[0]).not.toContain(DIR_TOKEN)
+  expect(h.seen[0]).not.toContain('brief rules')
+  expect(h.seen[0]).not.toContain('<!-- section:')
+})
+
+test('tiered card: a failing cards write sends the whole text (sections inline), never the core alone', async ($, on) => {
+  const h = chat(on)
+  tierFs(on, { failWrite: true })
+  await $.prompt.submit({ text: 'first' } as any)
+  expect(h.seen[0]).toContain('brief rules')
+  expect(h.seen[0]).toContain('block rules')
+  expect(h.seen[0]).toContain(DIR_TOKEN)
+})
+
+test('tiered card: splitCard finds each marker; a card with no marker is untouched; the shipped card splits into its named sections', () => {
+  const t = splitCard('# C `{SKILL_DIR}`\n\n<!-- section: a.md -->\nA\n\n\n<!-- section: b-c.md -->\nB')
+  expect(t.core).toBe('# C `{SKILL_DIR}`\n')
+  expect(t.sections).toEqual([['a.md', 'A\n'], ['b-c.md', 'B']])
+  expect(splitCard('plain').sections).toEqual([])
+  const shipped = splitCard(stripFrontmatter(CARD))
+  for (const [n] of shipped.sections) expect(shipped.core).toContain(`\`${n}\``)
 })
