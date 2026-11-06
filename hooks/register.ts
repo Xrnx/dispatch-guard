@@ -108,6 +108,47 @@ export const editsLedger = (e: Record<string, unknown>): boolean =>
 const ORCH_SKILL = /(^|:)orchestrator$/
 const ORCH_MSG = "orchestrator-proof: orchestrator skill not loaded this chat — Skill-load 'orchestrator' before the next step."
 
+// Round 2 answer checks (each at most one line beneath the answer, never blocks).
+// answer-first: J asked a yes/no question; the first line must carry the yes/no or a confidence label.
+const AUX_Q = /^(is|isn'?t|are|aren'?t|does|doesn'?t|do|don'?t|did|didn'?t|can|can'?t|will|should|was|were|has|have|so)\b[^?]*\?/i
+const REQUEST = /^(can|could|would|will) you\b/i
+const ANSWERED = /\b(yes|no|nope|verified|unverified|inferred|partly|partially|correct|incorrect|wrong|right|true|false|depends)\b/i
+const ANSWER_FIRST_MSG = 'answer-first: J asked a yes/no question — open with confidence + yes/no, then anything else.'
+export const yesNoQuestion = (prompt: string): boolean =>
+  prompt.split(/(?<=[.?!])\s+|\n+/).map(x => x.trim()).some(x => AUX_Q.test(x) && !REQUEST.test(x))
+export const answersFirst = (answer: string): boolean => {
+  const first = proseLines(answer).map(l => l.replace(/[*_#>`-]/g, ' ').trim()).find(l => l !== '') ?? ''
+  return ANSWERED.test(first.split(/\s+/).slice(0, 12).join(' '))
+}
+// lookup-first: "I don't know" or asking J for something, with no lookup tool this turn.
+const UNKNOWN = /\b(i (don'?t|do not) know|i'?m not sure|not sure (whether|if)|i can'?t (see|tell|access|check|verify)|no way (for me )?to (know|check|tell)|(send|share|give) me (a |the )?(screenshot|link|file|copy|figure)|(can|could) you (send|share|confirm|check|paste|tell me))\b/i
+const LOOKUP_TOOL = /^(Read|Grep|Glob|Bash|WebSearch|WebFetch|Skill|Agent|Task|Artifact|ArtifactData)$|memory_(read|list|search)$|(conversation_search|read_conversation|recent_chats)$|__(read|query|search|get_page_text|read_page|find|navigate)$/
+const LOOKUP_MSG = 'lookup-first: unknown/asked J with no lookup this turn — search memory, chat history, files or web first.'
+export const unknowns = (answer: string): boolean => proseLines(answer).filter(l => !l.trim().startsWith('>')).some(l => UNKNOWN.test(l))
+export const looksUp = (tool: string): boolean => LOOKUP_TOOL.test(tool)
+// eta-proof: an ETA in minutes relayed without the calibration factor (E×R).
+const RAW_ETA = /\b(ETA|done)\s*[:≈~]?\s*~?\d+\s?(min|mins|minutes|h|hrs?)\b/i
+const SCALED = /×|\(\s*\d+\s?[x*]\s?\d/
+const ETA_MSG = 'eta-proof: minute ETA with no E×R — scale by the calibration ratio before relaying.'
+// The "(running, ETA …)" footer is running-proof's; only relay lines are checked here.
+export const rawEta = (answer: string): boolean => proseLines(answer).some(l => RAW_ETA.test(l) && !SCALED.test(l) && !RUNNING.test(l))
+// checked-line: an option-seeking ask answered at length with no "checked: …" line of angles ruled out.
+const OPTION_ASK = /\b(best|recommend|which|options?|alternatives?|should i|what about|anything else|compare|vs\.?)\b/i
+const CHECKED = /\bchecked:/i
+const CHECKED_MSG = 'checked-line: option ask answered with no "checked: …" line — map the angles, list what was ruled out.'
+export const missingChecked = (prompt: string, answer: string): boolean => {
+  if (!OPTION_ASK.test(prompt) || CHECKED.test(answer)) return false
+  const words = proseLines(answer).filter(l => !l.trim().startsWith('>')).join(' ').split(/\s+/).filter(Boolean).length
+  return words >= 60
+}
+// reask-guard: J is correcting or re-asking. Tell the model before it answers; then the answer needs a
+// "Correction:" line or a confidence label.
+const REASK = /\b(verified where|where is (this|that|it)\b|why (did|do) you (say|think|use|put)|are you sure|is it really|no,? it'?s a question|i (just|already) (told|said)|repeat(ing)? myself|you (forgot|missed|ignored)|not what i (asked|said|meant)|what is (para|paragraph|cl|clause|s|section|sch|schedule)\b|that'?s (wrong|not right))/i
+const REASK_CTX = `${GUARD_TAG} reask-guard: J is correcting or re-asking. Re-open the source and quote the line; answer his literal question first; then Correction:/Prevention: if wrong.`
+const REASK_MSG = 'reask-guard: J re-asked; answer has no Correction: line or confidence label — re-check the source and add one.'
+const REASK_OK = /^[\s>*_-]*(\*\*)?Correction:|\b(verified|unverified|inferred)\b/im
+export const reasks = (prompt: string): boolean => REASK.test(prompt)
+
 // running-proof: a reply's "(running" needs a launch id from a tool result this turn, or one from an
 // earlier turn of the session that no notification has reported finished yet.
 const RUNNING = /\(running/i
@@ -190,9 +231,12 @@ export const offers = (answer: string): boolean => {
   return !DECISION.test(answer) && lines.some(l => OFFER.test(l))
 }
 // [unsourced "verified" lines, unverified/TBC markers]; blockquoted drafts count.
+// A "Sources:" line anywhere in the answer sources every "verified" in it.
+const SOURCES_LINE = /^[\s>*_-]*(\*\*)?Sources?:/im
 export const unverified = (answer: string): [number, number] => {
   const lines = proseLines(answer)
-  return [lines.filter(l => VERIFIED.test(l) && !SOURCE.test(l)).length, lines.filter(l => UNCHECKED.test(l)).length]
+  const sourced = SOURCES_LINE.test(lines.join('\n'))
+  return [sourced ? 0 : lines.filter(l => VERIFIED.test(l) && !SOURCE.test(l)).length, lines.filter(l => UNCHECKED.test(l)).length]
 }
 export const promises = (answer: string): boolean => proseLines(answer).some(l => PROMISE.test(l))
 export const writes = (tool: string): boolean => WRITE_TOOL.test(tool)
@@ -221,6 +265,10 @@ export const launched = (tool: string, ran: Ran): string | undefined => {
 export const finished = (text: string): string[] =>
   (text.match(DONE_NOTE) ?? []).filter(n => NOTE_FINAL.test(n)).flatMap(n => NOTE_ID.exec(n)?.[1] ?? [])
 export const unproven = (reply: string, proof: boolean): boolean => !proof && RUNNING.test(reply)
+// An idle claim outside the "Next:" footer ("Next: nothing running" just states the footer's status).
+const NEXT_LINE = /^[\s>*_-]*(\*\*)?Next:/i
+export const idleClaim = (answer: string): boolean =>
+  !NEEDS_J.test(answer) && answer.split('\n').some(l => !NEXT_LINE.test(l) && IDLE_TEXT.test(l))
 export const removesLedger = (command: string): boolean => LEDGER_RM.test(command)
 
 // Which chat was last reminded, keyed by session id: $.state survives a hot reload,
@@ -269,6 +317,8 @@ export const register: Register = on => {
   let injected: string | undefined // the session id this module last injected the card for
   let dueId: string | undefined // the session id the owed card is for
   let cardDue = false // a chat-start card is owed to the prompt in flight
+  let asked = '' // the text that opened this main turn (J's prompt)
+  let looked = false // a lookup tool ran this main turn
 
   // Once per chat: attach the orchestrator instruction to the first prompt, before the model's first reply.
   // Re-arms on a new session id (startup, /clear), so it needs no SessionStart hook.
@@ -282,6 +332,7 @@ export const register: Register = on => {
       e = { ...e, context: [...(e.context ?? []), carry] }
       carry = undefined
     }
+    if (reasks(e.text)) e = { ...e, context: [...(e.context ?? []), REASK_CTX] }
     // Each read is tolerant: a failing session/state/store API can't skip the injection, and the
     // module-local `injected` keeps it once per chat when state and store both fail.
     const id = await Promise.resolve().then(() => $.session.id()).catch(() => '?')
@@ -333,6 +384,8 @@ export const register: Register = on => {
       wrote = false
       dispatched = false
       boarded = false
+      looked = false
+      asked = e.text
       fromGuard = submitted || e.text.trimStart().startsWith(GUARD_TAG)
       submitted = false
       await close($, finished(e.text))
@@ -370,6 +423,7 @@ export const register: Register = on => {
     const ran = await next(e)
     if (ran.deny === undefined && !ran.isError) {
       if (writes(e.tool)) wrote = true
+      if (looksUp(e.tool)) looked = true
       if (ARTIFACT_DATA.test(e.tool) && ['set', 'update', 'batch'].includes(String((e as Record<string, unknown>).action))) boarded = true
       if (AGENT_TOOLS.has(e.tool) || editsLedger(e as unknown as Record<string, unknown>)) dispatched = true
       if (e.tool === 'Skill' && ORCH_SKILL.test(String((e as Record<string, unknown>).skill ?? ''))) {
@@ -397,7 +451,7 @@ export const register: Register = on => {
     if (e.reason !== 'answer') return ran
     let line: string | undefined
     if (RUNNING.test(e.answer) && unproven(e.answer, proof || (await openCount($)) > 0)) line = RUNNING_MSG
-    else if (!idleFired && IDLE_TEXT.test(e.answer) && !NEEDS_J.test(e.answer)) line = IDLE_MSG
+    else if (!idleFired && idleClaim(e.answer)) line = IDLE_MSG
     // miss-landing wins over parked-fix: a turn gets at most one of the two lines.
     if (missUnlanded(e.answer, proof || landed)) line = MISS_MSG
     else if (line === undefined && parkedFix(e.answer, proof || acted)) line = PARKED_MSG
@@ -423,6 +477,11 @@ export const register: Register = on => {
       await $.state.set(orchNagged, sid)
       extra.push(ORCH_MSG)
     }
+    if (yesNoQuestion(asked) && !answersFirst(e.answer)) extra.push(ANSWER_FIRST_MSG)
+    if (!looked && unknowns(e.answer)) extra.push(LOOKUP_MSG)
+    if (rawEta(e.answer)) extra.push(ETA_MSG)
+    if (missingChecked(asked, e.answer)) extra.push(CHECKED_MSG)
+    if (reasks(asked) && !REASK_OK.test(e.answer)) extra.push(REASK_MSG)
     const long = longPoints(e.answer)
     if (long > 0) extra.push(styleMsg(long))
     const all = [...(line === undefined ? [] : [line]), ...extra].join(' ')

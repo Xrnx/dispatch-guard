@@ -612,3 +612,65 @@ test('board-dispatch: an agent launch or ledger edit with no board write gets th
   expect(await done($, 't5', 'Read only.', [{ tool: 'Bash', command: 'cat "$L"' }])).not.toMatch(/Status board not updated/)
 })
 
+
+// Round 2: answer-time checks for re-ask rows. `ask` opens the turn with J's prompt text.
+const ask = async ($: any, id: string, prompt: string, answer: string, calls: any[] = []) => {
+  await $.turn.start({ text: prompt, turnId: id } as any)
+  for (const c of calls) await $.tool.call(c)
+  return (await $.turn.complete(end(id, answer))).text as string
+}
+
+test('verify-proof: a Sources: line anywhere sources every "verified" in the answer', async ($, on) => {
+  engine(on)
+  expect(await done($, 't1', '**Verified** no cap.\n\nSources: [Help](https://support.claude.com/x)')).not.toMatch(/verify-proof/)
+  expect(await done($, 't2', '**Verified** no cap.\n- cap [confirm]\n\nSources: [Help](https://support.claude.com/x)')).toMatch(/verify-proof: 1 unverified/)
+})
+
+test('idle-guard: "nothing running" in the Next: footer is not an idle claim', async ($, on) => {
+  engine(on)
+  expect(await done($, 't1', 'No limit found.\n\n**Next:** nothing running. Ask support.')).not.toMatch(/Idle guard/)
+  expect(await done($, 't2', 'Nothing running, queue empty.')).toMatch(/Idle guard/)
+})
+
+test('answer-first: a yes/no question answered without yes/no or a confidence label up front gets one line', async ($, on) => {
+  engine(on)
+  expect(await ask($, 't1', 'no its a question. is your header only limited to f i and j?', 'I rewrote the header to cover all deductions.')).toMatch(/answer-first/)
+  expect(await ask($, 't2', 'is it really buyer who decides what is due?', '**Unverified → no.** Para 3 lets Buyer withhold; it does not say Buyer decides.')).not.toMatch(/answer-first/)
+  expect(await ask($, 't3', 'can you shorten it?', 'Shortened to 3 lines.')).not.toMatch(/answer-first/)
+  expect(await ask($, 't4', 'list the deduction heads', 'Heads (a)–(j) listed.')).not.toMatch(/answer-first/)
+})
+
+test('lookup-first: "I don\'t know" or asking J with no lookup tool this turn gets one line', async ($, on) => {
+  engine(on)
+  expect(await ask($, 't1', 'what is the limit', "I don't know the exact limit.")).toMatch(/lookup-first/)
+  expect(await ask($, 't2', 'what is the icon', 'Could you send a screenshot of the icon?')).toMatch(/lookup-first/)
+  expect(await ask($, 't3', 'what is the limit', "I don't know — no page states it.", [{ tool: 'WebSearch', query: 'x' }])).not.toMatch(/lookup-first/)
+  expect(await ask($, 't4', 'what is the icon', 'Not in the key; send a screenshot (needs you).', [{ tool: 'mcp__memory__memory_read', path: '/x' }])).not.toMatch(/lookup-first/)
+})
+
+test('eta-proof: a minute ETA with no E×R gets one line', async ($, on) => {
+  engine(on)
+  expect(await done($, 't1', 'audit: ETA ~40 min')).toMatch(/eta-proof/)
+  expect(await done($, 't2', 'audit: ~12 min (40×0.3), done ≈ 17:10')).not.toMatch(/eta-proof/)
+  expect(await done($, 't3', 'Took 40 min to read.')).not.toMatch(/eta-proof/)
+})
+
+test('checked-line: a long answer to an option ask with no "checked:" line gets one line', async ($, on) => {
+  engine(on)
+  const long = Array(70).fill('board').join(' ')
+  expect(await ask($, 't1', 'best wireless split keyboard with decent keys?', long)).toMatch(/checked-line/)
+  expect(await ask($, 't2', 'best wireless split keyboard with decent keys?', long + '\nchecked: wired boards, 40-key boards')).not.toMatch(/checked-line/)
+  expect(await ask($, 't3', 'best wireless split keyboard?', 'Corne wireless.')).not.toMatch(/checked-line/)
+  expect(await ask($, 't4', 'redraft para 3', long)).not.toMatch(/checked-line/)
+})
+
+test('reask-guard: a re-ask adds context before the answer; an answer without Correction: or a label gets one line', async ($, on) => {
+  const seen = engine(on)
+  await $.prompt.submit({ text: 'verified where?' } as any)
+  expect(seen.at(-1)).toMatch(/reask-guard: J is correcting/)
+  await $.prompt.submit({ text: 'thanks' } as any)
+  expect(seen.at(-1)).not.toMatch(/reask-guard/)
+  expect(await ask($, 't1', 'verified where?', 'The fixed duties page.')).toMatch(/reask-guard: J re-asked/)
+  expect(await ask($, 't2', 'verified where?', 'Correction: not on that page; unverified until adjudicated.')).not.toMatch(/reask-guard/)
+  expect(await ask($, 't3', 'what is para 19', '**Verified** — para 19 is the dispute procedure. source: SPA p.40')).not.toMatch(/reask-guard/)
+})
