@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { CARD } from './orchestrator-card'
-import { longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL } from './register'
+import { RELAY_AT, longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL } from './register'
 
 const TURN = /4th tool call this turn/
 const BASH = /Foreground Bash looks long-running/
@@ -17,6 +17,18 @@ test('reminds on the 4th main-thread call only; exempt and subagent calls do not
   expect(ctx(fourth)).toMatch(TURN)
   expect((fourth as any).deny).toBeUndefined()
   expect(ctx(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).not.toMatch(TURN)
+})
+
+test('relay: a subagent gets one relay note at its RELAY_AT-th call; other agents and the main loop are unaffected', async ($, on) => {
+  on('tool.call', () => ({ result: {} }))
+  const RELAY = /relay: <path to progress\.md>/
+  for (let i = 1; i < RELAY_AT; i++) expect(ctx(await $.tool.call({ tool: 'Read', file_path: '/x', agentId: 'a1' } as any))).not.toMatch(RELAY)
+  expect(ctx(await $.tool.call({ tool: 'Grep', pattern: 'x', agentId: 'b2' } as any))).not.toMatch(RELAY)
+  const hit = await $.tool.call({ tool: 'Read', file_path: '/x', agentId: 'a1' } as any)
+  expect(ctx(hit)).toMatch(RELAY)
+  expect((hit as any).deny).toBeUndefined()
+  expect(ctx(await $.tool.call({ tool: 'Read', file_path: '/x', agentId: 'a1' } as any))).not.toMatch(RELAY)
+  expect(ctx(await $.tool.call({ tool: 'Read', file_path: '/x' } as any))).not.toMatch(RELAY)
 })
 
 test('read-only tools do not count toward the 4th-call reminder', async ($, on) => {
