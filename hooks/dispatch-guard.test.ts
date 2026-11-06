@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { CARD } from './orchestrator-card'
-import { SKILLS_ROOT, fnv8, stripFrontmatter } from './register'
+import { CARD, SECTIONS } from './orchestrator-card'
+import { DIR_TOKEN, SKILLS_ROOT, fnv8, inlineSections, sectionNames, stripFrontmatter } from './register'
 
 const TURN = /4th tool call this turn/
 const BASH = /Foreground Bash looks long-running/
@@ -103,14 +103,16 @@ const fakeSkills = (on: any, files: Record<string, { text: string; mtimeMs: numb
   on('fs.read', (_$: any, e: any) => { const f = at(e.path); if (!f) miss(); return { value: f!.text } })
 }
 const EMBEDDED = stripFrontmatter(CARD)
+// What the embedded fallback sends: a tiered core has its sections inlined after it.
+const SENT = EMBEDDED.includes(DIR_TOKEN) ? inlineSections(EMBEDDED) : EMBEDDED
 
 test('orchestrator card (skill text) rides the first prompt only, after the reminder', async ($, on) => {
   const h = chat(on)
   fakeSkills(on, undefined)
   await $.prompt.submit({ text: 'test' } as any)
   await $.prompt.submit({ text: 'second' } as any)
-  expect(h.seen[0]).toContain(EMBEDDED)
-  expect(h.seen[0].indexOf(EMBEDDED)).toBeGreaterThan(h.seen[0].search(START))
+  expect(h.seen[0]).toContain(SENT)
+  expect(h.seen[0].indexOf(SENT)).toBeGreaterThan(h.seen[0].search(START))
   expect(h.seen[1]).not.toMatch(/Orchestrator card/)
   expect(h.seen[1]).not.toContain(EMBEDDED)
 })
@@ -132,7 +134,7 @@ test('card: no synced skills dir falls back to the embedded card, tagged embedde
   fakeSkills(on, undefined)
   await $.prompt.submit({ text: 'first' } as any)
   expect(h.seen[0]).toContain(`Orchestrator card (${fnv8(EMBEDDED)}, embedded)`)
-  expect(h.seen[0]).toContain(EMBEDDED)
+  expect(h.seen[0]).toContain(SENT)
 })
 
 test('card: YAML frontmatter is stripped from live and embedded text', async ($, on) => {
@@ -467,7 +469,7 @@ test('card: $.fs.list throwing still injects the embedded card, and lastCard rec
   await $.prompt.submit({ text: 'first' } as any)
   expect(h.seen[0]).toMatch(START)
   expect(h.seen[0]).toContain(`Orchestrator card (${fnv8(EMBEDDED)}, embedded)`)
-  expect(h.seen[0]).toContain(EMBEDDED)
+  expect(h.seen[0]).toContain(SENT)
   expect(h.seen[0]).toContain(TAIL)
   const last = log.find(x => x.key === 'lastCard')?.value as any
   expect(last.source).toBe('embedded')
@@ -520,7 +522,7 @@ test('card: store and fs both throwing still inject once, not again on the next 
   await $.prompt.submit({ text: 'first' } as any)
   await $.prompt.submit({ text: 'second' } as any)
   expect(seen[0]).toMatch(START)
-  expect(seen[0]).toContain(EMBEDDED)
+  expect(seen[0]).toContain(SENT)
   expect(seen[1]).not.toMatch(START)
 })
 
@@ -612,3 +614,39 @@ test('board-dispatch: an agent launch or ledger edit with no board write gets th
   expect(await done($, 't5', 'Read only.', [{ tool: 'Bash', command: 'cat "$L"' }])).not.toMatch(/Status board not updated/)
 })
 
+
+// 0.4.2 tiered card: the core names on-demand section files under {SKILL_DIR}.
+const TIERED = '---\nname: orchestrator\n---\n# Core\nDir: `{SKILL_DIR}`. Agents → `dispatch.md`; handover → `handover.md`.'
+const tierFs = (on: any, have: string[]) => {
+  const dir = `${SKILLS_ROOT}/s1/orchestrator`
+  const miss = () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) }
+  on('fs.list', (_$: any, e: any) => (e.path === SKILLS_ROOT ? { value: [{ name: 's1', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] } : miss()))
+  on('fs.stat', (_$: any, e: any) => (e.path === `${dir}/SKILL.md` ? { value: { kind: 'file', size: 1, mtimeMs: 1, isLink: false } } : miss()))
+  on('fs.read', (_$: any, e: any) => (e.path === `${dir}/SKILL.md` ? { value: TIERED } : miss()))
+  on('fs.exists', (_$: any, e: any) => ({ value: have.some(n => e.path === `${dir}/${n}`) }))
+  return dir
+}
+
+test('tiered card: all section files on disk → {SKILL_DIR} becomes their dir, sections not inlined', async ($, on) => {
+  const h = chat(on)
+  const dir = tierFs(on, ['dispatch.md', 'handover.md'])
+  await $.prompt.submit({ text: 'first' } as any)
+  expect(h.seen[0]).toContain(`Dir: \`${dir}\``)
+  expect(h.seen[0]).not.toContain(DIR_TOKEN)
+  expect(h.seen[0]).not.toMatch(/\(inlined\)/)
+})
+
+test('tiered card: a missing section file → every section inlined from the build, token never left raw', async ($, on) => {
+  const h = chat(on)
+  tierFs(on, ['dispatch.md'])
+  await $.prompt.submit({ text: 'first' } as any)
+  expect(h.seen[0]).not.toContain(DIR_TOKEN)
+  expect(h.seen[0]).toContain('--- dispatch.md (inlined) ---')
+  expect(h.seen[0]).toContain('--- handover.md (inlined) ---')
+})
+
+test('tiered card: section names come from backticked *.md in the core; the build embeds each one the shipped core names', () => {
+  expect(sectionNames('`a.md` and `b-c.md`, `SKILL.md`, `a.md`')).toEqual(['a.md', 'b-c.md'])
+  for (const n of sectionNames(stripFrontmatter(CARD))) expect(typeof SECTIONS[n]).toBe('string')
+  expect(inlineSections('x `{SKILL_DIR}` `zz.md`')).toContain('(missing from this build')
+})
