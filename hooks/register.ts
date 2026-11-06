@@ -81,6 +81,33 @@ const ARTIFACT_DATA = /(^|__)ArtifactData$/
 const TS_TOLERANCE_MS = 5 * 60_000
 const IDLE_MSG = 'Idle guard: read /areas/open-items.md and every /areas/*-backlog.md via memory_read, dispatch what needs no J input, reply only "Idle guard fired re: <≤5 words>".'
 
+// offer-guard: an answer that ends on an offer waiting on J ("want me to…?", "say so") instead of doing
+// the step. "(needs you)" and D1/D2 decision questions are the legitimate forms, so they exempt it.
+const OFFER = /\b(want me to|shall I|should I|would you like|if you'?d like|say so|say the word|let me know if)\b/i
+const DECISION = /\(needs you\)|^\s*\**D\d+\b/im
+const OFFER_MSG = 'offer-guard: offer waiting on J — do it now if reversible, else mark it (needs you).'
+// verify-proof: "verified" needs a source on its own line (link, path or "source:"); quoted uses are not
+// claims. Unverified/TBC markers in an answer mean a checkable fact went out unchecked.
+const VERIFIED = /(?<![\w"'`“‘])(?<!un)verified\b(?!["'`”’])/i
+const SOURCE = /https?:\/\/|\]\(|(^|[\s(`])\/[\w.-]+\/|\bsource:/i
+const UNCHECKED = /(?<![\w"'`“‘])(unverified|to be confirmed|TBC|\[(confirm|check|verify)\b)(?!["'`”’])/i
+const verifyMsg = (n: number, m: number) =>
+  `verify-proof: ${[n ? `${n} "verified" with no source on its line` : '', m ? `${m} unverified/TBC markers` : ''].filter(Boolean).join(', ')} — add the source or check it now with own tools.`
+// promise-proof: an Efficiency/Prevention line or "from now on" with no write or dispatch this turn.
+const PROMISE = /^[\s>*_-]*(\*\*)?(Efficiency|Prevention):(\*\*)?\s*(?!(\*\*)?none\b)[^\s*]|\bfrom now on\b/im
+const WRITE_TOOL = /^(Edit|Write|NotebookEdit|Bash|ArtifactData|Artifact|Agent|Task|SendMessage)$|memory_(?!read|list|search)\w+$|__(update|batch|create|create_trigger|send_later)$/
+const PROMISE_MSG = 'promise-proof: Efficiency/Prevention/"from now on" with no write or dispatch this turn — make the change now or delete the line.'
+// board-dispatch: an agent launched or the ledger edited with no status-board write this turn.
+const LEDGER_PATH = /(^|\/)\.claude\/orchestrator\//
+const LEDGER_WRITE = /(>>?|\btee\b|\bsed\s+-i\b)[^;&|\n]*?(\$\{?L\}?\b|\.claude\/orchestrator\/)/
+const BOARD_MSG = 'Status board not updated for this dispatch — post it via ArtifactData before replying.'
+export const editsLedger = (e: Record<string, unknown>): boolean =>
+  ((e.tool === 'Edit' || e.tool === 'Write') && LEDGER_PATH.test(String(e.file_path ?? '')))
+  || (e.tool === 'Bash' && LEDGER_WRITE.test(String(e.command ?? '')))
+// orchestrator-proof: the chat was told to load the orchestrator skill, got no card, and no Skill call loaded it.
+const ORCH_SKILL = /(^|:)orchestrator$/
+const ORCH_MSG = "orchestrator-proof: orchestrator skill not loaded this chat — Skill-load 'orchestrator' before the next step."
+
 // running-proof: a reply's "(running" needs a launch id from a tool result this turn, or one from an
 // earlier turn of the session that no notification has reported finished yet.
 const RUNNING = /\(running/i
@@ -140,7 +167,8 @@ export const longPoints = (answer: string): number => {
   for (const raw of answer.split('\n')) {
     const l = raw.trim()
     if (/^(```|~~~)/.test(l)) { flush(); fenced = !fenced; continue }
-    if (fenced || l.startsWith('|')) { if (!fenced) flush(); continue }
+    // Tables, code and blockquotes (verbatim quotes, paste-ready text) are exempt from the word cap.
+    if (fenced || l.startsWith('|') || l.startsWith('>')) { if (!fenced) flush(); continue }
     if (l === '') flush()
     else if (/^([-*+]|\d+[.)])\s/.test(l)) { flush(); para.push(l.replace(/^([-*+]|\d+[.)])\s+/, '')) }
     else para.push(l)
@@ -148,6 +176,26 @@ export const longPoints = (answer: string): number => {
   flush()
   return n
 }
+
+// Answer lines outside fenced code: what the text checks read.
+const proseLines = (answer: string): string[] => {
+  let fenced = false
+  return answer.split('\n').filter(raw => {
+    if (/^\s*(```|~~~)/.test(raw)) { fenced = !fenced; return false }
+    return !fenced
+  })
+}
+export const offers = (answer: string): boolean => {
+  const lines = proseLines(answer).filter(l => !l.trim().startsWith('>'))
+  return !DECISION.test(answer) && lines.some(l => OFFER.test(l))
+}
+// [unsourced "verified" lines, unverified/TBC markers]; blockquoted drafts count.
+export const unverified = (answer: string): [number, number] => {
+  const lines = proseLines(answer)
+  return [lines.filter(l => VERIFIED.test(l) && !SOURCE.test(l)).length, lines.filter(l => UNCHECKED.test(l)).length]
+}
+export const promises = (answer: string): boolean => proseLines(answer).some(l => PROMISE.test(l))
+export const writes = (tool: string): boolean => WRITE_TOOL.test(tool)
 
 type Ran = { deny?: string; isError?: true; result?: unknown; text?: string }
 const field = (r: unknown, k: string): string | undefined => {
@@ -180,6 +228,9 @@ export const removesLedger = (command: string): boolean => LEDGER_RM.test(comman
 const remindedSession = { plugin: 'dispatch-guard', key: 'remindedSession' } as const
 // Launch ids proven in this session and not yet reported finished; survives a hot reload.
 const openLaunches = { plugin: 'dispatch-guard', key: 'openLaunches' } as const
+// The session that loaded the orchestrator skill, and the one already told it had not.
+const orchLoaded = { plugin: 'dispatch-guard', key: 'orchestratorLoaded' } as const
+const orchNagged = { plugin: 'dispatch-guard', key: 'orchestratorNagged' } as const
 const KEEP_LAUNCHES = 100
 const STORE_KEY = 'remindedSessions'
 const KEEP = 200
@@ -209,6 +260,9 @@ export const register: Register = on => {
   let landed = false // a write, memory-write or skill-proposal tool ran on the main thread this turn
   let stampFired = false // the board-timestamp lint went out this main turn
   let idleFired = false // the idle-guard reminder went out this main turn
+  let wrote = false // a write or dispatch tool ran this main turn
+  let dispatched = false // an agent was launched or the ledger edited this main turn
+  let boarded = false // an ArtifactData write ran this main turn
   let fromGuard = false // this main turn began with the guard's own continuation prompt
   let submitted = false // the guard submitted a continuation not yet started
   let carry: string | undefined // the end-of-turn line, for the model with the next prompt only
@@ -238,6 +292,7 @@ export const register: Register = on => {
     if (seen.includes(id)) {
       injected = id
       await $.state.set(remindedSession, id).catch(() => undefined)
+      await $.state.set(orchLoaded, id).catch(() => undefined) // card went out earlier this chat
       return next(e)
     }
     // Card build never throws (embedded fallback), and the once-per-chat slot (state + store) is
@@ -251,6 +306,7 @@ export const register: Register = on => {
     injected = id
     try {
       await $.state.set(remindedSession, id)
+      await $.state.set(orchLoaded, id) // the card carries the skill text: counts as loaded
       await $.store.set(STORE_KEY, [...seen, id].slice(-KEEP))
       if (card.info !== undefined) await $.store.set('lastCard', card.info)
     } catch {}
@@ -274,6 +330,9 @@ export const register: Register = on => {
       landed = false
       idleFired = false
       stampFired = false
+      wrote = false
+      dispatched = false
+      boarded = false
       fromGuard = submitted || e.text.trimStart().startsWith(GUARD_TAG)
       submitted = false
       await close($, finished(e.text))
@@ -309,6 +368,14 @@ export const register: Register = on => {
     if (WRITE_TOOLS.has(e.tool)) acted = true
     if (WRITE_TOOLS.has(e.tool) || LANDING_TOOL.test(e.tool)) landed = true
     const ran = await next(e)
+    if (ran.deny === undefined && !ran.isError) {
+      if (writes(e.tool)) wrote = true
+      if (ARTIFACT_DATA.test(e.tool) && ['set', 'update', 'batch'].includes(String((e as Record<string, unknown>).action))) boarded = true
+      if (AGENT_TOOLS.has(e.tool) || editsLedger(e as unknown as Record<string, unknown>)) dispatched = true
+      if (e.tool === 'Skill' && ORCH_SKILL.test(String((e as Record<string, unknown>).skill ?? ''))) {
+        await $.state.set(orchLoaded, await $.session.id())
+      }
+    }
     const id = launched(e.tool, ran)
     if (id !== undefined) {
       proof = true
@@ -344,10 +411,23 @@ export const register: Register = on => {
         continued = true
       }
     }
+    const extra: string[] = []
+    if (line !== IDLE_MSG && offers(e.answer)) extra.push(OFFER_MSG)
+    const [n, m] = unverified(e.answer)
+    if (n + m > 0) extra.push(verifyMsg(n, m))
+    if (!wrote && promises(e.answer)) extra.push(PROMISE_MSG)
+    if (dispatched && !boarded) extra.push(BOARD_MSG)
+    const sid = await $.session.id()
+    if ((await $.state.get(remindedSession)).value === sid && (await $.state.get(orchLoaded)).value !== sid
+      && (await $.state.get(orchNagged)).value !== sid) {
+      await $.state.set(orchNagged, sid)
+      extra.push(ORCH_MSG)
+    }
     const long = longPoints(e.answer)
-    if (long > 0) line = line === undefined ? styleMsg(long) : `${line} ${styleMsg(long)}`
-    if (line === undefined) return ran
-    if (!continued || line !== IDLE_MSG) carry = line
-    return { ...ran, text: line }
+    if (long > 0) extra.push(styleMsg(long))
+    const all = [...(line === undefined ? [] : [line]), ...extra].join(' ')
+    if (all === '') return ran
+    if (!continued || all !== IDLE_MSG) carry = all
+    return { ...ran, text: all }
   }).catch(($, e, next) => next(e))
 }

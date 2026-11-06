@@ -275,6 +275,7 @@ test('a clean turn produces zero hook output', async ($, on) => {
   const seen = engine(on)
   await $.prompt.submit({ text: 'first' } as any)
   await $.turn.start(turn('t1'))
+  await $.tool.call({ tool: 'Skill', skill: 'anthropic-skills:orchestrator' } as any)
   const a = await $.tool.call({ tool: 'Read', file_path: '/x' } as any)
   const b = await $.tool.call({ tool: 'Bash', command: 'ls' } as any)
   const answer = 'Result: fixed. Next: nothing running; review the diff (needs you).'
@@ -543,3 +544,71 @@ test('non-finishing 4th reminds once, not again on the 6th', async ($, on) => {
   await $.tool.call({ tool: 'Edit', file_path: '/x' } as any)
   expect(ctx(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).not.toMatch(TURN)
 })
+
+// Checks for covered-but-recurring misses: each fires one line beneath the answer, never blocks.
+const done = async ($: any, id: string, answer: string, calls: any[] = []) => {
+  await $.turn.start(turn(id))
+  for (const c of calls) await $.tool.call(c)
+  return (await $.turn.complete(end(id, answer))).text as string
+}
+const SKILL_ORCH = { tool: 'Skill', skill: 'anthropic-skills:orchestrator' } as any
+
+test('style: blockquoted and fenced lines are exempt from the 20-word cap', async ($, on) => {
+  engine(on)
+  const quote = '> ' + Array(30).fill('word').join(' ')
+  const code = '```\n' + Array(30).fill('word').join(' ') + '\n```'
+  expect(await done($, 't1', `**Rule** saved.\n\n${quote}\n\n${code}`)).not.toMatch(/points over 20 words/)
+  expect(await done($, 't2', Array(25).fill('word').join(' '))).toMatch(/Style: 1 points over 20 words/)
+})
+
+test('offer-guard: an answer ending on an offer gets one line; (needs you) and D1 questions do not', async ($, on) => {
+  engine(on)
+  expect(await done($, 't1', 'Timers left on. If you want them off, say so.')).toMatch(/offer-guard/)
+  expect(await done($, 't2', 'Done. Want me to queue the next batch?')).toMatch(/offer-guard/)
+  expect(await done($, 't3', 'Next: approve the push (needs you). Want me to draft it?')).not.toMatch(/offer-guard/)
+  expect(await done($, 't4', 'Built.\n\nD1: should I merge tonight?')).not.toMatch(/offer-guard/)
+  expect(await done($, 't5', 'Queue empty, all dispatched.')).not.toMatch(/offer-guard/)
+})
+
+test('verify-proof: "verified" with no source on its line, or unverified/TBC markers, get one line', async ($, on) => {
+  engine(on)
+  const r = await done($, 't1', '**Verified** no duty on transmission.\n- Sch 4 title [confirm]\n- cap is unverified')
+  expect(r).toMatch(/verify-proof: 1 "verified" with no source on its line, 2 unverified\/TBC markers/)
+  expect(r.split('\n').length).toBe(1)
+  expect(await done($, 't2', '**Verified**: s 4(1) — https://sso.agc.gov.sg/Act/SDA1929')).not.toMatch(/verify-proof/)
+  expect(await done($, 't3', 'Verified — source: /areas/recent-work.md')).not.toMatch(/verify-proof/)
+  expect(await done($, 't4', 'Label each claim "verified" or "unverified" per the rule.')).not.toMatch(/verify-proof/)
+})
+
+test('promise-proof: an Efficiency/Prevention line with no write this turn is flagged; with a write, or "none", it is not', async ($, on) => {
+  engine(on)
+  expect(await done($, 't1', 'Done.\n**Efficiency:** reload orchestrator on start.')).toMatch(/promise-proof/)
+  expect(await done($, 't2', 'From now on I will stamp from date.', [{ tool: 'Read', file_path: '/x' }])).toMatch(/promise-proof/)
+  expect(await done($, 't3', 'Done.\nPrevention: skill step added.', [{ tool: 'Edit', file_path: '/s.md', old_string: 'a', new_string: 'b' }])).not.toMatch(/promise-proof/)
+  expect(await done($, 't4', 'Done.\n**Efficiency:** none')).not.toMatch(/promise-proof/)
+  expect(await done($, 't5', 'Saved.', [{ tool: 'mcp__memory__memory_read', path: '/x' }])).not.toMatch(/promise-proof/)
+})
+
+test('orchestrator-proof: an injected chat-start card counts as loaded, so no line', async ($, on) => {
+  engine(on)
+  await $.prompt.submit({ text: 'first' } as any)
+  expect(await done($, 't1', 'Hi.')).not.toMatch(/orchestrator-proof/)
+  expect(await done($, 't2', 'Hi again.')).not.toMatch(/orchestrator-proof/)
+})
+
+test('orchestrator-proof: loading the skill before the answer prevents the line', async ($, on) => {
+  engine(on)
+  await $.prompt.submit({ text: 'first' } as any)
+  expect(await done($, 't1', 'Hi.', [SKILL_ORCH])).not.toMatch(/orchestrator-proof/)
+})
+
+test('board-dispatch: an agent launch or ledger edit with no board write gets the reminder; a board write clears it', async ($, on) => {
+  engine(on, { Agent: LAUNCH })
+  expect(await done($, 't1', 'Dispatched.', [AGENT_CALL])).toMatch(/Status board not updated for this dispatch/)
+  expect(await done($, 't2', 'Logged.', [{ tool: 'Bash', command: 'echo "- W3 audit" >> "$L"' }])).toMatch(/Status board not updated/)
+  expect(await done($, 't3', 'Logged.', [{ tool: 'Edit', file_path: '/root/.claude/orchestrator/ledger-x.md', old_string: 'a', new_string: 'b' }])).toMatch(/Status board not updated/)
+  const board = { tool: 'ArtifactData', action: 'update', url: 'u', collection: 'rows', doc_id: 'r', data: { status: 'running' } }
+  expect(await done($, 't4', 'Dispatched.', [AGENT_CALL, board])).not.toMatch(/Status board not updated/)
+  expect(await done($, 't5', 'Read only.', [{ tool: 'Bash', command: 'cat "$L"' }])).not.toMatch(/Status board not updated/)
+})
+

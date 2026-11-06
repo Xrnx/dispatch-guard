@@ -17,6 +17,13 @@ parked-fix: if a main-turn answer names a fix ("should be a cheap fix", "needs t
 miss-landing (0.3.11): if a main-turn answer has a line opening `Miss:`, `Correction:` or `Gap:` (after optional bold or bullet) and nothing landed this turn (no Edit, Write, NotebookEdit, Artifact, propose_skills or memory_write/append/str_replace tool, no launch id), one line shows beneath the answer: fix it this turn or say which existing rule covers it. "no fix", "no rule change", "already covers", "existing rule" and "(needs you)" are exempt. It shares the once-per-turn slot with parked-fix and wins when both match; never blocks.
 idle-guard: a Bash `rm` of the orchestrator ledger, or an answer saying "ledger cleared"/"queue empty", adds one reminder to read open-items and every backlog first; at most once per turn, never blocks.
 board-timestamp: an ArtifactData set/update/batch whose `updated` is unparseable or more than 5 min from the live clock adds one line to that result ("re-stamp from `date`"); at most once per turn, main thread only, never blocks.
+answer checks (each adds at most one line beneath the main-turn answer, carried to the model once with the next prompt, never blocks):
+- style: points over 20 words; blockquotes (`> `), tables and fenced code are exempt (verbatim quotes, paste-ready text).
+- offer-guard: an offer waiting on J ("want me to…", "say so") with no "(needs you)" or D1/D2 question.
+- verify-proof: "verified" with no source (link, path, `source:`) on its line, or unverified/TBC/[confirm] markers left in the answer.
+- promise-proof: an Efficiency/Prevention line (not "none") or "from now on" with no write or dispatch tool this turn.
+- orchestrator-proof: the chat was marked reminded but got no card and never loaded the skill; once per chat (dormant while card injection works).
+- board-dispatch: an Agent launch or ledger edit with no ArtifactData write this turn ("Status board not updated for this dispatch").
 
 ## Install
 
