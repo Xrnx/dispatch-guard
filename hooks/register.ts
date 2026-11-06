@@ -454,6 +454,15 @@ async function corrSend($: EngineInterface): Promise<number> {
   await $.store.set(CORR_KEY, (await corrQueue($)).filter(q => !sent.has(q.id)))
   return writes.length
 }
+// A card from any hook version (header "Orchestrator card (", heading "# Orchestrator") already in the chat counts as loaded.
+// An unreadable chat counts as loaded: a false alarm costs more than a missed one.
+const CARD_SEEN = /Orchestrator card \(|^# Orchestrator\b/m
+async function cardInChat($: EngineInterface): Promise<boolean> {
+  try {
+    const msgs = await $.session.messages()
+    return !Array.isArray(msgs) || msgs.some(m => typeof m.text === 'string' && CARD_SEEN.test(m.text))
+  } catch { return true }
+}
 async function corrLog($: EngineInterface, text: string): Promise<void> {
   if (NOT_J.test(text) || !correcting(text)) return
   const msgs = await $.session.messages()
@@ -478,6 +487,7 @@ export const register: Register = on => {
   let idleFired = false // the idle-guard reminder went out this main turn
   let wrote = false // a write or dispatch tool ran this main turn
   let dispatched = false // an agent was launched or the ledger edited this main turn
+  let chatDispatched = '' // session id of the chat that has dispatched an agent (the proof only matters then)
   let boarded = false // an ArtifactData write ran this main turn
   let fromGuard = false // this main turn began with the guard's own continuation prompt
   let submitted = false // the guard submitted a continuation not yet started
@@ -610,7 +620,10 @@ export const register: Register = on => {
         boarded = true
         await corrFlush($).catch(() => 0) // the session's own write just passed the check: queued rows can follow
       }
-      if (AGENT_TOOLS.has(e.tool) || editsLedger(e as unknown as Record<string, unknown>)) dispatched = true
+      if (AGENT_TOOLS.has(e.tool) || editsLedger(e as unknown as Record<string, unknown>)) {
+        dispatched = true
+        chatDispatched = await $.session.id()
+      }
       if (e.tool === 'Skill' && ORCH_SKILL.test(String((e as Record<string, unknown>).skill ?? ''))) {
         await $.state.set(orchLoaded, await $.session.id())
       }
@@ -659,8 +672,8 @@ export const register: Register = on => {
     if (!wrote && promises(e.answer)) extra.push(PROMISE_MSG)
     if (dispatched && !boarded) extra.push(BOARD_MSG)
     const sid = await $.session.id()
-    if ((await $.state.get(remindedSession)).value === sid && (await $.state.get(orchLoaded)).value !== sid
-      && (await $.state.get(orchNagged)).value !== sid) {
+    if (chatDispatched === sid && (await $.state.get(remindedSession)).value === sid && (await $.state.get(orchLoaded)).value !== sid
+      && (await $.state.get(orchNagged)).value !== sid && !(await cardInChat($))) {
       await $.state.set(orchNagged, sid)
       extra.push(ORCH_MSG)
     }

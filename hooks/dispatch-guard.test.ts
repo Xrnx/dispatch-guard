@@ -616,6 +616,32 @@ test('orchestrator-proof: loading the skill before the answer prevents the line'
   expect(await done($, 't1', 'Hi.', [SKILL_ORCH])).not.toMatch(/orchestrator-proof/)
 })
 
+const OLD_CARD = 'Orchestrator card (ab12cd34, live) — this is the skill content; follow it now:\n\n# Orchestrator\n...'
+// Old-hook chat: the card went out (remindedSession set) but this version never marked it loaded.
+const oproofEngine = async (_$: any, on: any, msgs: any[]) => {
+  const st: Record<string, unknown> = { remindedSession: 'session-A', openLaunches: [] }
+  engine(on, { Agent: LAUNCH })
+  on('session.messages', () => ({ value: msgs }))
+  on('state.get', (_$: any, e: any) => ({ value: { value: st[e.key] } }))
+  on('state.set', (_$: any, e: any) => { if (e.key !== 'orchestratorLoaded') st[e.key] = e.value; return { value: null } as any })
+}
+
+test('orchestrator-proof: card text from an older hook version in the chat counts as loaded (no false alarm)', async ($, on) => {
+  await oproofEngine($, on, [{ role: 'user', text: 'first\n' + OLD_CARD }, { role: 'assistant', text: 'ok' }])
+  expect(await done($, 't1', 'Dispatched.', [AGENT_CALL])).not.toMatch(/orchestrator-proof/)
+})
+
+test('orchestrator-proof: dispatching with no card and no Skill load still fires, once', async ($, on) => {
+  await oproofEngine($, on, [{ role: 'user', text: 'first' }, { role: 'assistant', text: 'ok' }])
+  expect(await done($, 't1', 'Dispatched.', [AGENT_CALL])).toMatch(/orchestrator-proof/)
+  expect(await done($, 't2', 'Again.', [AGENT_CALL])).not.toMatch(/orchestrator-proof/)
+})
+
+test('orchestrator-proof: a chat that never dispatches agents is not nagged', async ($, on) => {
+  await oproofEngine($, on, [{ role: 'user', text: 'first' }, { role: 'assistant', text: 'ok' }])
+  expect(await done($, 't1', 'Hi.')).not.toMatch(/orchestrator-proof/)
+})
+
 test('board-dispatch: an agent launch or ledger edit with no board write gets the reminder; a board write clears it', async ($, on) => {
   engine(on, { Agent: LAUNCH })
   expect(await done($, 't1', 'Dispatched.', [AGENT_CALL])).toMatch(/Status board not updated for this dispatch/)
