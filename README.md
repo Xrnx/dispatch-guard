@@ -25,6 +25,13 @@ answer checks (each adds at most one line beneath the main-turn answer, carried 
 - orchestrator-proof: the chat was marked reminded but got no card and never loaded the skill; once per chat (dormant while card injection works).
 - board-dispatch: an Agent launch or ledger edit with no ArtifactData write this turn ("Status board not updated for this dispatch").
 
+- answer-first: J's message holds a yes/no question and the answer's first line has no yes/no or confidence label.
+- lookup-first: "I don't know", "I can't see", or asking J for a screenshot/link/confirmation with no lookup tool (memory, chat search, files, web) this turn.
+- eta-proof: a relayed "ETA/done N min" with no E×R scaling (the "(running, ETA …)" footer is exempt).
+- checked-line: an option-seeking ask (best/which/recommend/options/vs) answered in 60+ words with no "checked: …" line.
+- reask-guard: a correcting or re-asking prompt ("verified where", "are you sure", "why did you say", "I already told you"…) gets one context line before the answer; an answer with no "Correction:" line or confidence label then gets one line.
+- verify-proof also accepts a "Sources:" line anywhere in the answer; idle-guard ignores idle words inside the "Next:" footer.
+
 ## Install
 
 At the prompt of a Claude Code session:
