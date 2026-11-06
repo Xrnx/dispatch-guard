@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { CARD } from './orchestrator-card'
-import { SKILLS_ROOT, fnv8, stripFrontmatter } from './register'
+import { SKILLS_ROOT, fnv8, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL } from './register'
 
 const TURN = /4th tool call this turn/
 const BASH = /Foreground Bash looks long-running/
@@ -673,4 +673,71 @@ test('reask-guard: a re-ask adds context before the answer; an answer without Co
   expect(await ask($, 't1', 'verified where?', 'The fixed duties page.')).toMatch(/reask-guard: J re-asked/)
   expect(await ask($, 't2', 'verified where?', 'Correction: not on that page; unverified until adjudicated.')).not.toMatch(/reask-guard/)
   expect(await ask($, 't3', 'what is para 19', '**Verified** — para 19 is the dispute procedure. source: SPA p.40')).not.toMatch(/reask-guard/)
+})
+
+// corr-log (0.4.5): J corrections are queued in the store and flushed to the scoreboard only when allowed.
+test('corr-log: detector catches corrections and leaves plain asks alone', () => {
+  for (const t of ['verified where?', 'where', 'just f i and j>', 'Are you sure. So 70db is safe?', 'what is para 19', 'And wireless', 'I just told you I\'m at 59%', 'Can you not mix up icons in future', 'its too long can shorten?', 'vcc doesnt have directors?'])
+    expect(correcting(t)).toBe(true)
+  for (const t of ['Status', 'ok', 'write a board resolution for removal of director', 'what is the indoor management rule', 'ETA', 'Can you keep yourself busy for next 24h', 'Try: split, wireless, ' + 'x '.repeat(100) + 'again'])
+    expect(correcting(t)).toBe(false)
+  expect(corrCategory('verified where?')).toBe('unverified claim')
+  expect(corrCategory('just f i and j')).toBe('wrong scope')
+})
+
+const corrEngine = (on: any, decision: string | (() => string), msgs: any[] = [{ role: 'user', text: 'Stamp duty on shares' }, { role: 'assistant', text: 'Verified: none.' }]) => {
+  const mem: Record<string, unknown> = {}
+  const calls: any[] = []
+  on('store.get', (_$: any, e: any) => ({ value: mem[e.key] }))
+  on('store.set', (_$: any, e: any) => { mem[e.key] = e.value; return { value: undefined } })
+  on('session.id', () => ({ value: 'session-C1234567' }))
+  on('session.messages', () => ({ value: msgs }))
+  on('clock.now', () => ({ value: Date.parse('2026-11-06T17:00:00Z') }))
+  on('tool.check', () => ({ decision: typeof decision === 'function' ? decision() : decision }))
+  on('tool.call', (_$: any, e: any) => { calls.push(e); return { result: {}, text: '' } })
+  on('prompt.submit', (_$: any, e: any) => ({ text: e.text, context: e.context }))
+  return { mem, calls }
+}
+
+test('corr-log: a correction after an answer flushes one scoreboard row when the check allows', async ($, on) => {
+  const { mem, calls } = corrEngine(on, 'allow')
+  await $.prompt.submit({ text: 'verified where?' } as any)
+  const w = calls.find(c => c.tool === 'ArtifactData')
+  expect(w.url).toBe(SCOREBOARD_URL)
+  expect(w.action).toBe('batch')
+  expect(w.writes[0].collection).toBe('corrections')
+  expect(w.writes[0].data).toMatchObject({ date: '2026-11-07', chat: 'Stamp duty on shares', words: 'verified where?', category: 'unverified claim', covered: false, count: 1, auto: true })
+  expect(mem.corrLog).toEqual([])
+  expect(calls.filter(c => c.tool === 'ArtifactData').length).toBe(1) // its own call does not re-flush
+})
+
+test('corr-log: an "ask" verdict never calls the tool and keeps the row queued', async ($, on) => {
+  const { mem, calls } = corrEngine(on, 'ask')
+  await $.prompt.submit({ text: 'are you sure' } as any)
+  expect(calls.some(c => c.tool === 'ArtifactData')).toBe(false)
+  expect((mem.corrLog as any[]).length).toBe(1)
+})
+
+test('corr-log: plain asks, agent messages and first prompts are not logged', async ($, on) => {
+  const { mem } = corrEngine(on, 'ask')
+  await $.prompt.submit({ text: 'Status' } as any)
+  await $.prompt.submit({ text: 'Another Claude session sent a message: why did you stop' } as any)
+  expect(mem.corrLog).toBeUndefined()
+})
+
+test('corr-log: no assistant message yet means nothing to correct', async ($, on) => {
+  const { mem } = corrEngine(on, 'allow', [{ role: 'user', text: 'where' }])
+  await $.prompt.submit({ text: 'where' } as any)
+  expect(mem.corrLog).toBeUndefined()
+})
+
+test('corr-log: a main-thread ArtifactData write flushes the queue', async ($, on) => {
+  let decision = 'ask'
+  const { mem, calls } = corrEngine(on, () => decision)
+  await $.prompt.submit({ text: 'why did you say this' } as any)
+  expect((mem.corrLog as any[]).length).toBe(1)
+  decision = 'allow'
+  await $.tool.call({ tool: 'ArtifactData', action: 'set', url: 'https://claude.ai/artifact/x', collection: 'status', doc_id: 'd', data: {} } as any)
+  expect(calls.filter(c => c.tool === 'ArtifactData' && c.action === 'batch').length).toBe(1)
+  expect(mem.corrLog).toEqual([])
 })

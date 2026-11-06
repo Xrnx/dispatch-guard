@@ -31,6 +31,7 @@ answer checks (each adds at most one line beneath the main-turn answer, carried 
 - checked-line: an option-seeking ask (best/which/recommend/options/vs) answered in 60+ words with no "checked: …" line.
 - reask-guard: a correcting or re-asking prompt ("verified where", "are you sure", "why did you say", "I already told you"…) gets one context line before the answer; an answer with no "Correction:" line or confidence label then gets one line.
 - verify-proof also accepts a "Sources:" line anywhere in the answer; idle-guard ignores idle words inside the "Next:" footer.
+- corr-log (0.4.5): a J prompt that corrects or re-asks after an answer ("verified where", "are you sure", "just f i and j", "what is para 19"…; first 160 chars only; agent messages and notifications skipped) becomes a row queued in the plugin store (`corrLog`: date SGT, chat, words, category guess, covered false, count 1, auto true). Rows flush in one ArtifactData batch to the Claude Scoreboard's `corrections` collection only when `tool.check` already says allow (after the session's own ArtifactData write was approved), and again after each main-thread ArtifactData write; never prompts J, never blocks. Detector on 42 J corrections vs 68 other J turns: recall 81%, false alarms 3%.
 
 ## Install
 
