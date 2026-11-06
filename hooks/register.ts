@@ -136,6 +136,8 @@ const SOURCE = /https?:\/\/|\]\(|(^|[\s(`])\/[\w.-]+\/|\bsource:|\b[\w-]+\.(?:co
 // An in-chat document ("verified against the pasted X") is source and quote at once: J can open it.
 const NAMED_SITE = /https?:\/\/|\]\(|\b[\w-]+\.(?:com|org|net|gov|edu|io|sg)\b/i
 const IN_CHAT = /\bagainst the (?:pasted|attached|uploaded|provided|supplied)\b/i
+// A named file (plugin.json, notes.md, run.py ...) or "the X file" is a checkable source when a quoted span is on the line.
+const FILE_SRC = /\b[\w-]+\.(?:json|md|py|ts|tsx|js|jsx|yml|yaml|toml|txt|csv|xml|html|sh|ini|cfg|conf|lock)\b|\bthe [\w.-]+ file\b/i
 const UNCHECKED = /(?<![\w"'`“‘])(unverified|to be confirmed|TBC|\[(confirm|check|verify)\b)(?!["'`”’])/i
 const verifyMsg = (n: number, m: number) =>
   `verify-proof: ${[n ? `${n} "verified" with no source and verbatim quote on its line` : '', m ? `${m} unverified/TBC markers` : ''].filter(Boolean).join(', ')} — add the source or check it now with own tools.`
@@ -187,13 +189,18 @@ export const missingChecked = (prompt: string, answer: string): boolean => {
   const words = proseLines(answer).filter(l => !l.trim().startsWith('>')).join(' ').split(/\s+/).filter(Boolean).length
   return words >= 60
 }
+// jText: only J's typed text counts. Agent messages, hand-backs, task/trigger notifications, notification reads
+// and system reminders are not J: strip them (an unclosed block runs to the end); a prompt that opens on one is not J's.
+const NOT_J_BLOCK = /<(agent-message|task-notification|system-reminder|cross-session-message|scheduled-task|trigger-notification|notification)\b[^>]*>[\s\S]*?(<\/\1>|$)/gi
+const NOT_J_FRAME = /^[ \t]*(\[Subagent hand-?back\]|\[Scheduled[^\]\n]*\]|\[Trigger[^\]\n]*\]|\[Notification[^\]\n]*\]|Another Claude session sent a message:?|Scheduled (?:task|trigger)[^\n]*(?:fired|notification)[^\n]*:)[\s\S]*$/im
+export const jText = (prompt: string): string => prompt.replace(NOT_J_BLOCK, ' ').replace(NOT_J_FRAME, '').trim()
 // reask-guard: J is correcting or re-asking. Tell the model before it answers; then the answer needs a
 // "Correction:" line or a confidence label.
 const REASK = /\b(verified where|where is (this|that|it)\b|why (did|do) you (say|think|use|put)|are you sure|is it really|no,? it'?s a question|i (just|already) (told|said)|repeat(ing)? myself|you (forgot|missed|ignored)|not what i (asked|said|meant)|what is (para|paragraph|cl|clause|s|section|sch|schedule)\b|that'?s (wrong|not right))/i
 const REASK_CTX = `${GUARD_TAG} reask-guard: J is correcting or re-asking. Re-open the source and quote the line; answer his literal question first; then Correction:/Prevention: if wrong.`
 const REASK_MSG = 'reask-guard: J re-asked; answer has no Correction: line or confidence label — re-check the source and add one.'
 const REASK_OK = /^[\s>*_-]*(\*\*)?Correction:|\b(verified|unverified|inferred)\b/im
-export const reasks = (prompt: string): boolean => REASK.test(prompt)
+export const reasks = (prompt: string): boolean => REASK.test(jText(prompt))
 
 // scope-quote: J stated a limit ("just f, i, j", "not just 40 keys", "finish the limit"). Quote his exact
 // phrase back as context so the answer honours it. Narrow patterns on purpose: plain "just"/"only" don't fire.
@@ -232,7 +239,7 @@ export const scopePhrases = (prompt: string): string[] => {
 }
 export const scopeCtx = (prompt: string): string | undefined => {
   if (prompt.trimStart().startsWith(GUARD_TAG) || prompt.includes('<task-notification>')) return undefined
-  const p = scopePhrases(prompt)
+  const p = scopePhrases(jText(prompt))
   return p.length === 0 ? undefined : `Scope: J said ${p.map(x => `"${x}"`).join(' ')}. Honour it in every part of the answer.`
 }
 
@@ -334,7 +341,7 @@ const QUOTE = /“[^”]{4,}”|"[^"\n]{4,}"|^\s*>\s*\S/m
 export const unverified = (answer: string): [number, number] => {
   const lines = proseLines(answer)
   const sourced = SOURCES_LINE.test(lines.join('\n'))
-  const bad = lines.filter((l, i) => (VERIFIED.test(l) || RULED_OUT.test(l)) && !IN_CHAT.test(l) && ((!sourced && !SOURCE.test(l)) || !QUOTE.test(`${l}\n${lines[i + 1] ?? ''}`))).length
+  const bad = lines.filter((l, i) => (VERIFIED.test(l) || RULED_OUT.test(l)) && !IN_CHAT.test(l) && ((!sourced && !SOURCE.test(l) && !(FILE_SRC.test(l) && QUOTE.test(l))) || !QUOTE.test(`${l}\n${lines[i + 1] ?? ''}`))).length
   // An unverified marker that names where it looked (site or link) is an honest disclosure, not an unchecked fact.
   return [bad, lines.filter(l => UNCHECKED.test(l) && !NAMED_SITE.test(l)).length]
 }
@@ -412,7 +419,7 @@ const CORRECTING = new RegExp(
   + "|what is (para|paragraph|cl|clause|s|section|sch|schedule)\\b|that" + Q + "?s (wrong|not right)|what the (hell|heck|f)|supposed to|in future|mix(ed)? up|except for|not just\\b|too (long|short|verbose|wordy)\\b|shorten\\b|\\bpaste\\b"
   + "|you can google|look (it )?up|\\bagain\\b|does(n" + Q + "?t| not)? have\\b|(i|we) (don" + Q + "?t|do not) (have|need|want|use)\\b|can" + Q + "?t get\\b)", 'i')
 // Only the opening of a prompt is read: a long pasted brief is no correction.
-export const correcting = (text: string): boolean => CORRECTING.test(text.trim().slice(0, 160))
+export const correcting = (text: string): boolean => CORRECTING.test(jText(text).slice(0, 160))
 const CATEGORIES: [RegExp, string][] = [
   [/verified where|are you sure|is it really|really mean|why (did|do) you|why do you say|what is (para|cl|s|sch)|^where\b/i, 'unverified claim'],
   [/too (long|short|verbose|wordy)|shorten|eta|slow/i, 'slow/over-long'],
@@ -566,7 +573,7 @@ export const register: Register = on => {
       dispatched = false
       boarded = false
       looked = false
-      asked = e.text
+      asked = jText(e.text)
       fromGuard = submitted || e.text.trimStart().startsWith(GUARD_TAG)
       submitted = false
       await close($, finished(e.text))

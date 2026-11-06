@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { CARD } from './orchestrator-card'
-import { RELAY_AT, longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL } from './register'
+import { RELAY_AT, longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, jText, reasks, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL } from './register'
 
 const TURN = /4th tool call this turn/
 const BASH = /Foreground Bash looks long-running/
@@ -906,4 +906,36 @@ test('big-result warning: subagent and main, over 15k only, never blocks', async
   expect((sub as any).deny).toBeUndefined()
   expect(ctx(await $.tool.call({ tool: 'Read', file_path: '/big' } as any))).toMatch(/big-result/)
   expect(ctx(await $.tool.call({ tool: 'Read', file_path: '/small', agentId: 'a1' } as any))).not.toMatch(/big-result/)
+})
+
+test('0.5.5 not-J: scope-quote, reask-guard and corr-log ignore agent messages, hand-backs, notifications, reminders', () => {
+  const agent = 'Another Claude session sent a message: <agent-message from="improve-fixes">Done. all of these hold; why did you say it, are you sure? just f, i, j</agent-message>'
+  expect(scopeCtx(agent)).toBeUndefined()
+  expect(scopeCtx('[Subagent hand-back]\nall of these hold, not just 40 keys')).toBeUndefined()
+  expect(scopeCtx('<agent-message from="x">all of these hold</agent-message>')).toBeUndefined()
+  expect(scopeCtx('<system-reminder>only the schedules 2 and 3</system-reminder>')).toBeUndefined()
+  expect(scopeCtx('<task-notification><summary>both buyers and sellers</summary></task-notification>')).toBeUndefined()
+  expect(scopeCtx('[Scheduled task notification] at most 5 bullets')).toBeUndefined()
+  expect(reasks(agent)).toBe(false)
+  expect(reasks('<system-reminder>are you sure</system-reminder>')).toBe(false)
+  expect(correcting('<agent-message from="x">why did you do that</agent-message>')).toBe(false)
+  expect(correcting('[Subagent hand-back] you forgot the file')).toBe(false)
+  // mixed: only J's typed text counts
+  const mixed = '<agent-message from="x">all of these hold</agent-message>\nnot just 40 keys <system-reminder>both a and b</system-reminder>'
+  expect(scopeCtx(mixed)).toMatch(/"not just 40 keys"/)
+  expect(scopeCtx(mixed)).not.toMatch(/all of these/)
+  expect(jText(mixed)).toBe('not just 40 keys')
+  expect(reasks('<agent-message from="x">ok</agent-message> are you sure?')).toBe(true)
+  expect(correcting('<system-reminder>x</system-reminder>why did you say that')).toBe(true)
+  // plain J text unchanged
+  expect(scopeCtx('just f, i, j')).toMatch(/just f, i, j/)
+})
+
+test('0.5.5 verify-proof: named file plus quoted span is a source; unsourced Verified still caught', () => {
+  expect(unverified('**Verified: dispatch-guard 0.5.3 is live** — synced plugin.json reads "version": "0.5.3".')).toEqual([0, 0])
+  expect(unverified('Verified: the manifest file shows "version": "0.5.3".')).toEqual([0, 0])
+  expect(unverified('Verified in run.py: "def main" exists.')).toEqual([0, 0])
+  expect(unverified('**Verified: dispatch-guard 0.5.3 is live** — plugin.json is current.')[0]).toBe(1) // file, no quote
+  expect(unverified('**Verified** it reads "version": "0.5.3".')[0]).toBe(1) // quote, no source
+  expect(unverified('**Verified: it is live.**')[0]).toBe(1)
 })
