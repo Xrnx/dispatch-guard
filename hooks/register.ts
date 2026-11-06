@@ -149,6 +149,47 @@ const REASK_MSG = 'reask-guard: J re-asked; answer has no Correction: line or co
 const REASK_OK = /^[\s>*_-]*(\*\*)?Correction:|\b(verified|unverified|inferred)\b/im
 export const reasks = (prompt: string): boolean => REASK.test(prompt)
 
+// scope-quote: J stated a limit ("just f, i, j", "not just 40 keys", "finish the limit"). Quote his exact
+// phrase back as context so the answer honours it. Narrow patterns on purpose: plain "just"/"only" don't fire.
+const LIST_ITEM = String.raw`\(?[a-z0-9]{1,2}\)?`
+const SCOPE_PATTERNS: RegExp[] = [
+  /\bnot just\s+[^\s.?!,;]+(?:\s+[^\s.?!,;]+){0,3}/i,
+  new RegExp(String.raw`\b(?:just|only)\s+(?:the\s+)?(?:${LIST_ITEM}(?:\s*,\s*|\s+and\s+|\s*&\s*))+${LIST_ITEM}\b`, 'i'),
+  /\b(?:just|only)\s+(?:the\s+)?(?:top\s+|first\s+|last\s+)?\d+(?:\s+[a-z]+)?/i,
+  /\b(?:just|only)\s+(?:the\s+)?(?:paras?|paragraphs?|clauses?|sections?|schedules?|heads?|items?|keys?|rows?|columns?|wireless|wired)\s+[\w-]+/i,
+  /\bonly\s+(?:the|in|from|those|these|include|list|show)\s+[\w-]+(?:\s+[\w-]+){0,2}/i,
+  /\b(?:except|excluding|apart from|other than)\s+(?:the\s+)?[\w-]+(?:\s+[\w-]+){0,2}/i,
+  /\b(?:at least|at most|no more than|no fewer than|no less than|up to|a maximum of|a minimum of)\s+\d+(?:\s+[a-z]+)?/i,
+  /\b\d+\s?(?:keys?|words?|characters?|chars|lines?|pages?|bullets?|points?)\b/i,
+  /\bboth\s+[\w-]+(?:\s+[\w-]+){0,2}?\s+and\s+[\w-]+/i,
+  /\ball of (?:the|these|those)\s+[\w-]+/i,
+  /\band also\s+[\w-]+(?:\s+[\w-]+){0,2}/i,
+  /\b(?:finish|use up|exhaust)\s+(?:the|my|all)\s+(?:limit|quota|allowance|budget|cap)\b/i,
+  /\band\s+(?:wireless|wired|bluetooth)\b/i,
+]
+export const scopePhrases = (prompt: string): string[] => {
+  const found: { at: number; text: string }[] = []
+  for (const re of SCOPE_PATTERNS) {
+    const m = re.exec(prompt)
+    if (m !== null) found.push({ at: m.index, text: m[0].trim().split(/\s+/).slice(0, 5).join(' ') })
+  }
+  found.sort((a, b) => a.at - b.at)
+  const out: string[] = []
+  let words = 0
+  for (const f of found) {
+    const n = f.text.split(' ').length
+    if (out.includes(f.text) || words + n > 8) continue
+    out.push(f.text)
+    words += n
+  }
+  return out
+}
+export const scopeCtx = (prompt: string): string | undefined => {
+  if (prompt.trimStart().startsWith(GUARD_TAG) || prompt.includes('<task-notification>')) return undefined
+  const p = scopePhrases(prompt)
+  return p.length === 0 ? undefined : `Scope: J said ${p.map(x => `"${x}"`).join(' ')}. Honour it in every part of the answer.`
+}
+
 // running-proof: a reply's "(running" needs a launch id from a tool result this turn, or one from an
 // earlier turn of the session that no notification has reported finished yet.
 const RUNNING = /\(running/i
@@ -333,6 +374,8 @@ export const register: Register = on => {
       carry = undefined
     }
     if (reasks(e.text)) e = { ...e, context: [...(e.context ?? []), REASK_CTX] }
+    const scope = scopeCtx(e.text)
+    if (scope !== undefined) e = { ...e, context: [...(e.context ?? []), scope] }
     // Each read is tolerant: a failing session/state/store API can't skip the injection, and the
     // module-local `injected` keeps it once per chat when state and store both fail.
     const id = await Promise.resolve().then(() => $.session.id()).catch(() => '?')

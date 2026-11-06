@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { CARD } from './orchestrator-card'
-import { SKILLS_ROOT, fnv8, stripFrontmatter } from './register'
+import { SKILLS_ROOT, fnv8, scopeCtx, stripFrontmatter } from './register'
 
 const TURN = /4th tool call this turn/
 const BASH = /Foreground Bash looks long-running/
@@ -673,4 +673,45 @@ test('reask-guard: a re-ask adds context before the answer; an answer without Co
   expect(await ask($, 't1', 'verified where?', 'The fixed duties page.')).toMatch(/reask-guard: J re-asked/)
   expect(await ask($, 't2', 'verified where?', 'Correction: not on that page; unverified until adjudicated.')).not.toMatch(/reask-guard/)
   expect(await ask($, 't3', 'what is para 19', '**Verified** — para 19 is the dispute procedure. source: SPA p.40')).not.toMatch(/reask-guard/)
+})
+
+test('scope-quote: J\'s stated limits are quoted back in one Scope: line of at most 20 words', async ($, on) => {
+  const seen = engine(on)
+  const cases: [string, RegExp][] = [
+    ['list the deduction heads, just f, i, j', /"just f, i, j"/],
+    ['best split keyboard, not just 40 keys', /"not just 40 keys"/],
+    ['best split keyboard? not just 40 keys and wireless', /not just 40 keys/],
+    ['finish the limit before the reset', /"finish the limit"/],
+    ['redraft para 3 except the carve-out', /"except the carve-out"/],
+    ['summary in at most 5 bullets please', /"at most 5 bullets"/],
+    ['compare both buyers and sellers', /"both buyers and sellers"/],
+    ['only the schedules 2 and 3', /"only the schedules 2"/],
+    ['and also the novation deed', /"and also the novation deed"/],
+  ]
+  for (const [text, re] of cases) {
+    const line = scopeCtx(text)
+    expect(line).toMatch(/^Scope: /)
+    expect(line).toMatch(re)
+    expect(line!.split(/\s+/).length).toBeLessThanOrEqual(20)
+  }
+  await $.prompt.submit({ text: 'just f, i, j' } as any)
+  expect(seen.at(-1)).toMatch(/Scope: J said "just f, i, j"/)
+})
+
+test('scope-quote: 20 ordinary messages and guard/notification prompts do not trigger', async () => {
+  const plain = [
+    'thanks', 'looks good, ship it', 'what is para 19', 'verified where?', 'continue',
+    'redraft clause 4.2 in a firmer tone', 'summarise the SPA for me', 'is the skincare plan working?',
+    'check the board and tell me what is open', 'why did the hash change?', 'yes go ahead',
+    'open the DPS Lab and add the new weapon', 'what should I eat tonight near 439945',
+    'draft the email to the Cayman counsel', 'did the audit finish?', 'sounds right, do it',
+    'fix the redline tool so it handles tables', 'where is the handoff file?', 'rerun the tests',
+    'I am just checking in, no rush',
+  ]
+  expect(plain).toHaveLength(20)
+  const hits = plain.filter(t => scopeCtx(t) !== undefined)
+  expect(hits.length).toBeLessThanOrEqual(1)
+  expect(hits).toEqual([])
+  expect(scopeCtx('[dispatch-guard] continue only the open items')).toBeUndefined()
+  expect(scopeCtx('<task-notification>only 3 left</task-notification>')).toBeUndefined()
 })
