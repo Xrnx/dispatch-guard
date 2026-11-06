@@ -860,3 +860,12 @@ test('tiered card: splitCard finds each marker; a card with no marker is untouch
   const shipped = splitCard(stripFrontmatter(CARD))
   for (const [n] of shipped.sections) expect(shipped.core).toContain(`\`${n}\``)
 })
+
+test('big-result warning: subagent and main, over 15k only, never blocks', async ($, on) => {
+  on('tool.call', (_$: any, e: any) => ({ result: {}, text: e.file_path === '/big' ? 'x'.repeat(20000) : 'small' }))
+  const sub = await $.tool.call({ tool: 'Read', file_path: '/big', agentId: 'a1' } as any)
+  expect(ctx(sub)).toMatch(/big-result: 20k chars/)
+  expect((sub as any).deny).toBeUndefined()
+  expect(ctx(await $.tool.call({ tool: 'Read', file_path: '/big' } as any))).toMatch(/big-result/)
+  expect(ctx(await $.tool.call({ tool: 'Read', file_path: '/small', agentId: 'a1' } as any))).not.toMatch(/big-result/)
+})

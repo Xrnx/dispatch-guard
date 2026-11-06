@@ -99,6 +99,12 @@ async function cardMsg($: EngineInterface): Promise<{ msg: string; info: CardInf
   if (live.error !== undefined) info.error = live.error
   return { msg: cardText(tag, source, placed.body), info }
 }
+const BIG = 15000
+const BIG_MSG = (n: number): string => `big-result: ${Math.round(n / 1000)}k chars now in context; do not re-read it. Next pull: Grep/Read offset+limit; Artifact read with path then Grep that file; conversation_search max_results 3-5 plus within_conversation_id.`
+export const bigResult = (ran: Ran): number => {
+  const t = ran.text ?? (typeof ran.result === 'string' ? ran.result : JSON.stringify(ran.result ?? ''))
+  return t.length > BIG ? t.length : 0
+}
 const BASH_MSG = 'Foreground Bash looks long-running (node/python/npm test/playwright/sleep) — use run_in_background or a background agent.'
 const RUNNING_MSG = '(running) claimed but nothing launched this turn — start it or say not started.'
 const PARKED_MSG = 'Fix named but not started — dispatch it this turn (agent/edit/publish) or mark (needs you).'
@@ -554,7 +560,11 @@ export const register: Register = on => {
 
   // Warn only: always run the tool, then append a reminder to its result.
   on('tool.call', async ($, e, next) => {
-    if (e.agentId !== undefined) return next(e)
+    if (e.agentId !== undefined) { // subagents: only the big-result warning, never counted or blocked
+      const r = await next(e)
+      const n = r.deny === undefined && !r.isError ? bigResult(r) : 0
+      return n > 0 ? { ...r, context: [...(r.context ?? []), BIG_MSG(n)] } : r
+    }
     const notes: string[] = []
     // A handoff resume/write turn is a short fixed sequence; handing it to an agent only slows it.
     if (e.tool === 'Skill' && /(^|:)handoff$/.test(String((e as Record<string, unknown>).skill ?? ''))) handoffTurn = true
@@ -597,6 +607,8 @@ export const register: Register = on => {
       proof = true
       await remember($, id)
     }
+    const big = ran.deny === undefined && !ran.isError ? bigResult(ran) : 0
+    if (big > 0) notes.push(BIG_MSG(big))
     if (notes.length === 0 || ran.deny !== undefined) return ran
     return { ...ran, context: [...(ran.context ?? []), ...notes] }
   }).catch(($, e, next) => next(e))
