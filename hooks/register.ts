@@ -89,7 +89,12 @@ const OFFER_MSG = 'offer-guard: offer waiting on J — do it now if reversible, 
 // verify-proof: "verified" needs a source on its own line (link, path or "source:"); quoted uses are not
 // claims. Unverified/TBC markers in an answer mean a checkable fact went out unchecked.
 const VERIFIED = /(?<![\w"'`“‘])(?<!un)verified\b(?!["'`”’])/i
-const SOURCE = /https?:\/\/|\]\(|(^|[\s(`])\/[\w.-]+\/|\bsource:/i
+// A source is a link, path, "source:", a named domain, a document locator (para 9, cl 1.1, s 41B, Sch 7), or the
+// J-supplied document itself ("against the pasted/attached draft"): all checkable at a glance.
+const SOURCE = /https?:\/\/|\]\(|(^|[\s(`])\/[\w.-]+\/|\bsource:|\b[\w-]+\.(?:com|org|net|gov|edu|io|sg)\b|\b(?:paras?|paragraphs?|cl|clauses?|ss?|sections?|sch|schedules?|arts?|articles?|regs?)\.?\s*\d|\b(?:against|in|per|from|on) the (?:pasted|attached|uploaded|provided|supplied|screenshot|draft)\b/i
+// An in-chat document ("verified against the pasted X") is source and quote at once: J can open it.
+const NAMED_SITE = /https?:\/\/|\]\(|\b[\w-]+\.(?:com|org|net|gov|edu|io|sg)\b/i
+const IN_CHAT = /\bagainst the (?:pasted|attached|uploaded|provided|supplied)\b/i
 const UNCHECKED = /(?<![\w"'`“‘])(unverified|to be confirmed|TBC|\[(confirm|check|verify)\b)(?!["'`”’])/i
 const verifyMsg = (n: number, m: number) =>
   `verify-proof: ${[n ? `${n} "verified" with no source and verbatim quote on its line` : '', m ? `${m} unverified/TBC markers` : ''].filter(Boolean).join(', ')} — add the source or check it now with own tools.`
@@ -192,7 +197,8 @@ export const scopeCtx = (prompt: string): string | undefined => {
 
 // running-proof: a reply's "(running" needs a launch id from a tool result this turn, or one from an
 // earlier turn of the session that no notification has reported finished yet.
-const RUNNING = /\(running/i
+// "(running" or "running (Sonnet)" / "running (Opus ..." : both claim a launched agent.
+const RUNNING = /\(running|\brunning \((?:haiku|sonnet|opus|fable)/i
 const AGENT_TOOLS = new Set(['Agent', 'Task'])
 const TRIGGER_TOOL = /(^|__)(create_trigger|send_later)$/
 const AGENT_ID = /\b(?:agentId|agent_id|agent|id)\b["']?\s*[:=]\s*["']?([\w-]{4,})/
@@ -238,11 +244,17 @@ export const staleStamp = (e: unknown, now: number = Date.now()): string | undef
 }
 
 // Points over STYLE_MAX words: each bullet or paragraph outside code blocks; tables and code skipped.
+// Not points: headings (own line), URLs of links, and verbatim quoted spans (exempt; each counts as one word).
+// A bold footer label (**Next:** / **Efficiency:** / **Leap:**) starts its own point even on a shared line.
+const QUOTED = /“[^”]*”|"[^"\n]*"/g
+const FOOTER_LABEL = /\s+(?=\*\*(?:Next|Efficiency|Leap):\*\*)/
+const pointWords = (t: string): number =>
+  t.replace(/\]\([^)\s]*\)/g, ']').replace(QUOTED, 'Q').split(/\s+/).filter(Boolean).length
 export const longPoints = (answer: string): number => {
   let n = 0
   let para: string[] = []
   const flush = () => {
-    if (para.join(' ').split(/\s+/).filter(Boolean).length > STYLE_MAX) n++
+    for (const p of para.join(' ').split(FOOTER_LABEL)) if (pointWords(p) > STYLE_MAX) n++
     para = []
   }
   let fenced = false
@@ -251,7 +263,7 @@ export const longPoints = (answer: string): number => {
     if (/^(```|~~~)/.test(l)) { flush(); fenced = !fenced; continue }
     // Tables, code and blockquotes (verbatim quotes, paste-ready text) are exempt from the word cap.
     if (fenced || l.startsWith('|') || l.startsWith('>')) { if (!fenced) flush(); continue }
-    if (l === '') flush()
+    if (l === '' || /^#{1,6}\s/.test(l)) { flush(); if (l !== '') continue }
     else if (/^([-*+]|\d+[.)])\s/.test(l)) { flush(); para.push(l.replace(/^([-*+]|\d+[.)])\s+/, '')) }
     else para.push(l)
   }
@@ -281,8 +293,9 @@ const QUOTE = /“[^”]{4,}”|"[^"\n]{4,}"|^\s*>\s*\S/m
 export const unverified = (answer: string): [number, number] => {
   const lines = proseLines(answer)
   const sourced = SOURCES_LINE.test(lines.join('\n'))
-  const bad = lines.filter((l, i) => (VERIFIED.test(l) || RULED_OUT.test(l)) && ((!sourced && !SOURCE.test(l)) || !QUOTE.test(`${l}\n${lines[i + 1] ?? ''}`))).length
-  return [bad, lines.filter(l => UNCHECKED.test(l)).length]
+  const bad = lines.filter((l, i) => (VERIFIED.test(l) || RULED_OUT.test(l)) && !IN_CHAT.test(l) && ((!sourced && !SOURCE.test(l)) || !QUOTE.test(`${l}\n${lines[i + 1] ?? ''}`))).length
+  // An unverified marker that names where it looked (site or link) is an honest disclosure, not an unchecked fact.
+  return [bad, lines.filter(l => UNCHECKED.test(l) && !NAMED_SITE.test(l)).length]
 }
 export const promises = (answer: string): boolean => proseLines(answer).some(l => PROMISE.test(l))
 export const writes = (tool: string): boolean => WRITE_TOOL.test(tool)

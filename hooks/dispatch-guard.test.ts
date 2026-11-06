@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { CARD } from './orchestrator-card'
-import { SKILLS_ROOT, fnv8, scopeCtx, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL } from './register'
+import { longPoints, unverified, unproven, SKILLS_ROOT, fnv8, scopeCtx, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL } from './register'
 
 const TURN = /4th tool call this turn/
 const BASH = /Foreground Bash looks long-running/
@@ -791,4 +791,24 @@ test('corr-log: a main-thread ArtifactData write flushes the queue', async ($, o
   await $.tool.call({ tool: 'ArtifactData', action: 'set', url: 'https://claude.ai/artifact/x', collection: 'status', doc_id: 'd', data: {} } as any)
   expect(calls.filter(c => c.tool === 'ArtifactData' && c.action === 'batch').length).toBe(1)
   expect(mem.corrLog).toEqual([])
+})
+
+// 0.5.1-fa: false-alarm tuning, mis-parses only (the 20-word cap itself is unchanged).
+test('style: quoted spans, link URLs, headings and footer labels on one line are not over-long points', () => {
+  const quoted = 'Para 3(f) covers documents "to which the Seller and/or any Seller\'s Affiliate is party or any of its related group companies" so Affiliates fit.'
+  expect(longPoints(quoted)).toBe(0)
+  expect(longPoints('- ' + 'word '.repeat(21).trim())).toBe(1)
+  expect(longPoints('# ' + 'heading '.repeat(25) + '\n- short point')).toBe(0)
+  expect(longPoints('**Next:** ' + 'ask for the extract before signing '.repeat(2).trim() + ' (needs you). **Efficiency:** none **Leap:** none')).toBe(0)
+})
+test('verify-proof: locator, named site and in-chat document count as sources; locators do not excuse an unverified marker', () => {
+  expect(unverified('**Verified** in para 3: "directly or indirectly" appears only in 3(f).')).toEqual([0, 0])
+  expect(unverified('**Verified** against the pasted Schedule 7.')).toEqual([0, 0])
+  expect(unverified('Raise 2 back in; dygma.com lists no spacebar keycap (unverified).')).toEqual([0, 0])
+  expect(unverified('Whether s 32C reaches it is unverified.')[1]).toBe(1)
+  expect(unverified('**Verified safe.**')[0]).toBe(1)
+})
+test('running-proof: "running (Sonnet)" claims a launch like "(running"', () => {
+  expect(unproven('**Next:** valuer gets both names — running (Sonnet), ETA 00:05.', false)).toBe(true)
+  expect(unproven('Nothing is running now.', false)).toBe(false)
 })
