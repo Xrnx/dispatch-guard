@@ -1,4 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { CARD } from './orchestrator-card'
+import { SKILLS_ROOT, fnv8, stripFrontmatter } from './register'
 
 const TURN = /4th tool call this turn/
 const BASH = /Foreground Bash looks long-running/
@@ -7,14 +9,32 @@ const ctx = (r: any): string => (r?.context ?? []).join('\n')
 test('reminds on the 4th main-thread call only; exempt and subagent calls do not count', async ($, on) => {
   on('tool.call', () => ({ result: {} }))
   for (let i = 0; i < 3; i++) {
-    expect(ctx(await $.tool.call({ tool: 'Read', file_path: '/x' } as any))).not.toMatch(TURN)
+    expect(ctx(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).not.toMatch(TURN)
   }
   await $.tool.call({ tool: 'SendMessage', to: 'main', message: 'x' } as any)
-  await $.tool.call({ tool: 'Read', file_path: '/x', agentId: 'a1' } as any)
-  const fourth = await $.tool.call({ tool: 'Read', file_path: '/x' } as any)
+  await $.tool.call({ tool: 'Edit', file_path: '/x', agentId: 'a1' } as any)
+  const fourth = await $.tool.call({ tool: 'Edit', file_path: '/x' } as any)
   expect(ctx(fourth)).toMatch(TURN)
   expect((fourth as any).deny).toBeUndefined()
-  expect(ctx(await $.tool.call({ tool: 'Read', file_path: '/x' } as any))).not.toMatch(TURN)
+  expect(ctx(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).not.toMatch(TURN)
+})
+
+test('read-only tools do not count toward the 4th-call reminder', async ($, on) => {
+  on('tool.call', () => ({ result: {} }))
+  for (let i = 0; i < 4; i++) {
+    expect(ctx(await $.tool.call({ tool: 'Read', file_path: '/x' } as any))).not.toMatch(TURN)
+  }
+  expect(ctx(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).not.toMatch(TURN)
+})
+
+test('4th counted call still reminds after read-only calls', async ($, on) => {
+  on('tool.call', () => ({ result: {} }))
+  await $.tool.call({ tool: 'Read', file_path: '/x' } as any)
+  await $.tool.call({ tool: 'Read', file_path: '/x' } as any)
+  await $.tool.call({ tool: 'Edit', file_path: '/x' } as any)
+  await $.tool.call({ tool: 'Edit', file_path: '/x' } as any)
+  expect(ctx(await $.tool.call({ tool: 'Write', file_path: '/x' } as any))).not.toMatch(TURN)
+  expect(ctx(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).toMatch(TURN)
 })
 
 test('no 4th-call reminder in a turn that loaded the handoff skill', async ($, on) => {
@@ -32,11 +52,11 @@ test('a /handoff slash command makes its turn a handoff turn; the next turn re-a
   await $.prompt.submit({ text: '', command: { name: 'anthropic-skills:handoff', args: '' } } as any)
   await $.turn.start({ text: '', turnId: 'h1' } as any)
   for (let i = 0; i < 5; i++) {
-    expect(ctx(await $.tool.call({ tool: 'Read', file_path: '/x' } as any))).not.toMatch(TURN)
+    expect(ctx(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).not.toMatch(TURN)
   }
   await $.turn.start({ text: 'hi', turnId: 'h2' } as any)
-  for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Read', file_path: '/x' } as any)
-  expect(ctx(await $.tool.call({ tool: 'Read', file_path: '/x' } as any))).toMatch(TURN)
+  for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Edit', file_path: '/x' } as any)
+  expect(ctx(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).toMatch(TURN)
 })
 
 test('flags long-looking foreground Bash, not background Bash', async ($, on) => {
@@ -68,6 +88,63 @@ test('orchestrator reminder rides the first prompt only', async ($, on) => {
   expect(h.seen[0]).toMatch(START)
   expect(h.seen[1]).not.toMatch(START)
   expect(h.seen[2]).not.toMatch(START)
+})
+
+// A fake synced-skills dir: the test's fs hooks stand for the disk (nothing else sits beneath them).
+const fakeSkills = (on: any, files: Record<string, { text: string; mtimeMs: number }> | undefined) => {
+  const miss = () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) }
+  on('fs.list', (_$: any, e: any) => {
+    if (files === undefined || e.path !== SKILLS_ROOT) miss()
+    return { value: Object.keys(files!).map(id => ({ name: id, kind: 'dir', size: 0, mtimeMs: 0, isLink: false })) }
+  })
+  const at = (p: string) => Object.entries(files ?? {}).find(([id]) => p === `${SKILLS_ROOT}/${id}/orchestrator/SKILL.md`)?.[1]
+  on('fs.stat', (_$: any, e: any) => { const f = at(e.path); if (!f) miss(); return { value: { kind: 'file', size: f!.text.length, mtimeMs: f!.mtimeMs, isLink: false } } })
+  on('fs.exists', (_$: any, e: any) => ({ value: at(e.path) !== undefined }))
+  on('fs.read', (_$: any, e: any) => { const f = at(e.path); if (!f) miss(); return { value: f!.text } })
+}
+const EMBEDDED = stripFrontmatter(CARD)
+
+test('orchestrator card (skill text) rides the first prompt only, after the reminder', async ($, on) => {
+  const h = chat(on)
+  fakeSkills(on, undefined)
+  await $.prompt.submit({ text: 'test' } as any)
+  await $.prompt.submit({ text: 'second' } as any)
+  expect(h.seen[0]).toContain(EMBEDDED)
+  expect(h.seen[0].indexOf(EMBEDDED)).toBeGreaterThan(h.seen[0].search(START))
+  expect(h.seen[1]).not.toMatch(/Orchestrator card/)
+  expect(h.seen[1]).not.toContain(EMBEDDED)
+})
+
+test('card: the newest synced SKILL.md on disk wins and is tagged live with its body hash', async ($, on) => {
+  const h = chat(on)
+  const newer = '---\nname: orchestrator\n---\n\n# Orchestrator NEW\nlive body'
+  fakeSkills(on, { old: { text: '---\nname: x\n---\n# OLD', mtimeMs: 1 }, fresh: { text: newer, mtimeMs: 2 } })
+  await $.prompt.submit({ text: 'first' } as any)
+  const body = '# Orchestrator NEW\nlive body'
+  expect(h.seen[0]).toContain(`Orchestrator card (${fnv8(body)}, live)`)
+  expect(h.seen[0]).toContain(body)
+  expect(h.seen[0]).not.toContain('# OLD')
+  expect(h.seen[0]).not.toContain(EMBEDDED)
+})
+
+test('card: no synced skills dir falls back to the embedded card, tagged embedded', async ($, on) => {
+  const h = chat(on)
+  fakeSkills(on, undefined)
+  await $.prompt.submit({ text: 'first' } as any)
+  expect(h.seen[0]).toContain(`Orchestrator card (${fnv8(EMBEDDED)}, embedded)`)
+  expect(h.seen[0]).toContain(EMBEDDED)
+})
+
+test('card: YAML frontmatter is stripped from live and embedded text', async ($, on) => {
+  expect(CARD.startsWith('---')).toBe(true)
+  expect(EMBEDDED.startsWith('# Orchestrator')).toBe(true)
+  expect(stripFrontmatter('---\na: 1\nb: "x"\n---\n\nBody')).toBe('Body')
+  expect(stripFrontmatter('No frontmatter\n---\nrule')).toBe('No frontmatter\n---\nrule')
+  const h = chat(on)
+  fakeSkills(on, { s1: { text: '---\nname: orchestrator\ndescription: "d"\n---\nBODY ONLY', mtimeMs: 5 } })
+  await $.prompt.submit({ text: 'first' } as any)
+  expect(h.seen[0]).not.toMatch(/name: orchestrator|description: "d"/)
+  expect(h.seen[0]).toContain('BODY ONLY')
 })
 
 test('a plugin reload in the same chat does not remind again, even if session state is lost', async ($, on) => {
@@ -302,4 +379,167 @@ test('board-timestamp: an unparseable `updated` counts as a miss', async ($, on)
   engine(on)
   await $.turn.start(turn('t1'))
   expect(ctx(await $.tool.call(AD({ updated: 'sometime this morning' })))).toMatch(/board-timestamp: `updated` "sometime this morning" is unparseable/)
+})
+
+const PARKED = /^Fix named but not started — dispatch it this turn/
+const GAP = "It doesn't flag ties. That should be a cheap page fix."
+
+test('parked-fix: a named fix with no launch or write gets one line', async ($, on) => {
+  engine(on)
+  await $.turn.start(turn('p1'))
+  const r = await $.turn.complete(end('p1', GAP))
+  expect(r.text).toMatch(PARKED)
+  expect(r.text.split('\n').length).toBe(1)
+})
+
+test('parked-fix: a launch id or an Edit this turn means no line', async ($, on) => {
+  engine(on, { Agent: { result: { status: 'async_launched', agentId: 'a1b2c3d4' }, text: 'agentId: a1b2c3d4' } })
+  await $.turn.start(turn('p2'))
+  await $.tool.call({ tool: 'Agent', prompt: 'x', description: 'x', run_in_background: true } as any)
+  expect((await $.turn.complete(end('p2', GAP))).text).not.toMatch(PARKED)
+  await $.turn.start(turn('p3'))
+  await $.tool.call({ tool: 'Edit', file_path: '/x', old_string: 'a', new_string: 'b' } as any)
+  expect((await $.turn.complete(end('p3', GAP))).text).not.toMatch(PARKED)
+})
+
+test('parked-fix: past-tense reports and (needs you) are no miss', async ($, on) => {
+  engine(on)
+  await $.turn.start(turn('p4'))
+  expect((await $.turn.complete(end('p4', 'Fix landed and published.'))).text).not.toMatch(PARKED)
+  await $.turn.start(turn('p5'))
+  expect((await $.turn.complete(end('p5', `${GAP} Next: (needs you)`))).text).not.toMatch(PARKED)
+})
+
+const MISS = /^Miss named but nothing landed — fix it this turn/
+
+test('miss-landing: "Correction:" with no writes gets one line', async ($, on) => {
+  engine(on)
+  await $.turn.start(turn('m1'))
+  const r = await $.turn.complete(end('m1', '**Correction:** the count was 36, not 37.'))
+  expect(r.text).toMatch(MISS)
+  expect(r.text.split('\n').length).toBe(1)
+})
+
+test('miss-landing: a memory_append this turn means silent', async ($, on) => {
+  engine(on)
+  await $.turn.start(turn('m2'))
+  await $.tool.call({ tool: 'mcp__memory__memory_append', path: '/x', content: 'y' } as any)
+  expect((await $.turn.complete(end('m2', 'Miss: skipped the rules step.'))).text ?? '').not.toMatch(MISS)
+})
+
+test('miss-landing: "existing rule covers" is exempt', async ($, on) => {
+  engine(on)
+  await $.turn.start(turn('m3'))
+  expect((await $.turn.complete(end('m3', 'Correction: wrong date. The existing rule covers it.'))).text ?? '').not.toMatch(MISS)
+})
+
+test('miss-landing: wins over parked-fix, one line only', async ($, on) => {
+  engine(on)
+  await $.turn.start(turn('m4'))
+  const r = await $.turn.complete(end('m4', "- Gap: no tie flag. That should be a cheap page fix."))
+  expect(r.text).toMatch(MISS)
+  expect(r.text).not.toMatch(PARKED)
+  expect(r.text.split('\n').length).toBe(1)
+})
+
+// 0.3.10 fail-safe card: injection never depends on fs, crypto or the store succeeding.
+const TAIL = "If this card is absent in your context, Skill-load 'orchestrator'."
+// An in-memory store that logs each write (mock.store would claim the store.set hook).
+const storeLog = (on: any, order?: string[]) => {
+  const mem: Record<string, unknown> = {}
+  const log: { key: string; value: unknown }[] = []
+  on('store.get', (_$: any, e: any) => ({ value: mem[e.key] }))
+  on('store.set', (_$: any, e: any) => { mem[e.key] = e.value; log.push({ key: e.key, value: e.value }); order?.push(`store:${e.key}`); return { value: undefined } })
+  return log
+}
+const chatLogged = (on: any, order?: string[]) => {
+  const seen: string[] = []
+  on('session.id', () => ({ value: 'session-L' }))
+  on('prompt.submit', (_$: any, e: any) => { order?.push('inject'); seen.push((e.context ?? []).join('\n')); return { text: e.text, context: e.context } })
+  return { seen, log: storeLog(on, order) }
+}
+
+test('card: $.fs.list throwing still injects the embedded card, and lastCard records the error', async ($, on) => {
+  const { seen, log } = chatLogged(on)
+  const h = { seen }
+  on('fs.list', () => { throw new Error('list exploded') })
+  await $.prompt.submit({ text: 'first' } as any)
+  expect(h.seen[0]).toMatch(START)
+  expect(h.seen[0]).toContain(`Orchestrator card (${fnv8(EMBEDDED)}, embedded)`)
+  expect(h.seen[0]).toContain(EMBEDDED)
+  expect(h.seen[0]).toContain(TAIL)
+  const last = log.find(x => x.key === 'lastCard')?.value as any
+  expect(last.source).toBe('embedded')
+  expect(last.tag).toBe(fnv8(EMBEDDED))
+  expect(last.files).toBe(0)
+  expect(last.root).toBe(SKILLS_ROOT)
+  expect(String(last.error)).toContain('fs.list') // the kit reports a throwing hook as "no implementation for fs.list"
+  expect(Number.isNaN(Date.parse(last.at))).toBe(false)
+})
+
+test('card: with crypto undefined the card still injects, tagged by FNV-1a', async ($, on) => {
+  const saved = Object.getOwnPropertyDescriptor(globalThis, 'crypto')
+  Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true, writable: true })
+  try {
+    expect((globalThis as any).crypto).toBeUndefined()
+    const { seen, log } = chatLogged(on)
+    const h = { seen }
+    fakeSkills(on, { s1: { text: '---\nname: orchestrator\n---\nLIVE BODY', mtimeMs: 3 } })
+    await $.prompt.submit({ text: 'first' } as any)
+    expect(fnv8('LIVE BODY')).toMatch(/^[0-9a-f]{8}$/)
+    expect(h.seen[0]).toContain(`Orchestrator card (${fnv8('LIVE BODY')}, live)`)
+    const last = log.find(x => x.key === 'lastCard')?.value as any
+    expect(last.source).toBe('live')
+    expect(last.files).toBe(1)
+    expect(last.error).toBeUndefined()
+  } finally {
+    if (saved) Object.defineProperty(globalThis, 'crypto', saved)
+  }
+})
+
+test('card: the once-per-chat store write happens after the injection, and a failing store skips nothing', async ($, on) => {
+  const order: string[] = []
+  const { seen } = chatLogged(on, order)
+  fakeSkills(on, undefined)
+  await $.prompt.submit({ text: 'first' } as any)
+  expect(order[0]).toBe('inject')
+  expect(order.slice(1).every(x => x.startsWith('store:'))).toBe(true)
+  expect(order).toContain('store:remindedSessions')
+  expect(order).toContain('store:lastCard')
+  expect(seen[0]).toMatch(START)
+})
+
+test('card: store and fs both throwing still inject once, not again on the next prompt', async ($, on) => {
+  on('session.id', () => ({ value: 'session-T' }))
+  on('store.get', () => { throw new Error('store down') })
+  on('store.set', () => { throw new Error('store down') })
+  on('fs.list', () => { throw new Error('fs down') })
+  const seen: string[] = []
+  on('prompt.submit', (_$: any, e: any) => { seen.push((e.context ?? []).join('\n')); return { text: e.text, context: e.context } })
+  await $.prompt.submit({ text: 'first' } as any)
+  await $.prompt.submit({ text: 'second' } as any)
+  expect(seen[0]).toMatch(START)
+  expect(seen[0]).toContain(EMBEDDED)
+  expect(seen[1]).not.toMatch(START)
+})
+
+test('4th call being a single ArtifactData save is silent', async ($, on) => {
+  on('tool.call', () => ({ result: {} }))
+  for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Edit', file_path: '/x' } as any)
+  expect(ctx(await $.tool.call({ tool: 'ArtifactData', action: 'set', url: 'u' } as any))).not.toMatch(TURN)
+})
+
+test('4th = Artifact publish silent, 5th = WebSearch reminds', async ($, on) => {
+  on('tool.call', () => ({ result: {} }))
+  for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Edit', file_path: '/x' } as any)
+  expect(ctx(await $.tool.call({ tool: 'Artifact', file_path: '/p.html' } as any))).not.toMatch(TURN)
+  expect(ctx(await $.tool.call({ tool: 'WebSearch', query: 'q' } as any))).toMatch(TURN)
+})
+
+test('non-finishing 4th reminds once, not again on the 6th', async ($, on) => {
+  on('tool.call', () => ({ result: {} }))
+  for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Edit', file_path: '/x' } as any)
+  expect(ctx(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).toMatch(TURN)
+  await $.tool.call({ tool: 'Edit', file_path: '/x' } as any)
+  expect(ctx(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).not.toMatch(TURN)
 })

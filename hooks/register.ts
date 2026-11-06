@@ -1,19 +1,85 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { CARD } from './orchestrator-card'
 
-const EXEMPT = new Set(['Agent', 'SendMessage', 'TaskCreate', 'TaskUpdate'])
+const EXEMPT = new Set(['Agent', 'SendMessage', 'TaskCreate', 'TaskUpdate', 'Read', 'Glob', 'Grep', 'ToolSearch', 'TaskGet', 'TaskList'])
+const MEMORY_READ = /(^|__)memory_read$/
+const exempt = (tool: string): boolean => EXEMPT.has(tool) || MEMORY_READ.test(tool)
 const LIMIT = 3
+// A single finishing write (save/publish/send) is not worth an agent hop: never the trigger for the reminder (it still counts).
+const MEMORY_WRITE = /(^|__)memory_(write|str_replace|append)$/
+const READ_ACTIONS = new Set(['get', 'list', 'query', 'read'])
+const finishing = (e: Record<string, unknown>): boolean => {
+  const tool = String(e.tool)
+  if (MEMORY_WRITE.test(tool) || tool === 'SendUserMessage' || tool === 'SendUserFile' || tool === 'propose_skills') return true
+  const action = String(e.action ?? 'publish')
+  if (/(^|__)ArtifactData$/.test(tool)) return !READ_ACTIONS.has(action)
+  if (tool === 'Artifact') return action === 'publish'
+  return false
+}
 const LONG = /(^|[\s;&|(])(node|python3?|npm\s+(run\s+)?test|npx\s+playwright|playwright|sleep)(\s|$)/
 const TURN_MSG = '4th tool call this turn — hand the rest to a background agent and reply to the user.'
 const START_MSG = "Load the orchestrator skill (Skill tool, skill 'orchestrator') before anything else in this chat, even for one-word or test messages."
+// Card: the synced orchestrator SKILL.md read live at chat start (newest mtime across sync ids);
+// the embedded CARD (scripts/sync-card.sh) is only the fallback. Frontmatter stripped; tag = FNV-1a 32-bit of the body, 8 hex.
+export const SKILLS_ROOT = '/root/.claude/skills/synced'
+export const stripFrontmatter = (t: string): string => t.replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, '').replace(/^\s+/, '')
+// FNV-1a 32-bit, 8 hex: a pure-JS tag, so the card needs no runtime crypto or TextEncoder.
+export const fnv8 = (t: string): string => {
+  let h = 0x811c9dc5
+  for (let i = 0; i < t.length; i++) {
+    h ^= t.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
+}
+type Live = { text?: string; files: number; error?: string }
+async function liveSkill($: EngineInterface): Promise<Live> {
+  let best = -1
+  const out: Live = { files: 0 }
+  for (const d of await $.fs.list(SKILLS_ROOT)) {
+    const name = typeof d === 'string' ? d : (d as { name?: unknown } | null)?.name
+    if (typeof name !== 'string' || name === '' || name.startsWith('.')) continue // .bucket-* files are not skill dirs
+    const p = `${SKILLS_ROOT}/${name}/orchestrator/SKILL.md`
+    try {
+      const m = Number((await $.fs.stat(p)).mtimeMs) || 0
+      out.files += 1
+      if (m <= best && out.text !== undefined) continue
+      const t = await $.fs.read(p)
+      if (typeof t === 'string' && t.trim().length > 0) { best = m; out.text = t }
+    } catch (err) { out.error ??= String(err).slice(0, 200) }
+  }
+  return out
+}
+const CARD_TAIL = "\n\nIf this card is absent in your context, Skill-load 'orchestrator'."
+const cardText = (tag: string, source: string, body: string): string =>
+  `Orchestrator card (${tag}, ${source}) — this is the skill content; follow it now:\n\n${body}${CARD_TAIL}`
+const embeddedBody = (): string => { try { return stripFrontmatter(CARD) } catch { return CARD } }
+export const fallbackCard = (): string => { const b = embeddedBody(); return cardText(fnv8(b), 'embedded', b) }
+export type CardInfo = { at: string; source: 'live' | 'embedded'; tag: string; error?: string; root: string; files: number }
+// Never throws: any fs failure (or anything else) falls back to the embedded card.
+async function cardMsg($: EngineInterface): Promise<{ msg: string; info: CardInfo }> {
+  let live: Live = { files: 0 }
+  try { live = await liveSkill($) } catch (err) { live = { files: 0, error: String(err).slice(0, 200) } }
+  let body: string
+  let source: 'live' | 'embedded' = live.text !== undefined ? 'live' : 'embedded'
+  try { body = stripFrontmatter(live.text ?? CARD) } catch (err) { body = embeddedBody(); source = 'embedded'; live.error ??= String(err).slice(0, 200) }
+  let tag = '00000000'
+  try { tag = fnv8(body) } catch {}
+  const info: CardInfo = { at: new Date().toISOString(), source, tag, root: SKILLS_ROOT, files: live.files }
+  if (live.error !== undefined) info.error = live.error
+  return { msg: cardText(tag, source, body), info }
+}
 const BASH_MSG = 'Foreground Bash looks long-running (node/python/npm test/playwright/sleep) — use run_in_background or a background agent.'
 const RUNNING_MSG = '(running) claimed but nothing launched this turn — start it or say not started.'
+const PARKED_MSG = 'Fix named but not started — dispatch it this turn (agent/edit/publish) or mark (needs you).'
+const MISS_MSG = 'Miss named but nothing landed — fix it this turn (memory/skill/code) or say which existing rule covers it.'
 const STYLE_MAX = 20
 const styleMsg = (n: number) => `Style: ${n} points over ${STYLE_MAX} words last reply — fragments, ≤${STYLE_MAX} words per point.`
 const GUARD_TAG = '[dispatch-guard]'
-const IDLE_PROMPT = `${GUARD_TAG} Idle guard: read /areas/open-items.md and every /areas/*-backlog.md via memory_read now, dispatch what needs no J input, then reply in one line.`
+const IDLE_PROMPT = `${GUARD_TAG} Idle guard: read /areas/open-items.md and every /areas/*-backlog.md via memory_read now, dispatch what needs no J input, reply only "Idle guard fired re: <≤5 words>".`
 const ARTIFACT_DATA = /(^|__)ArtifactData$/
 const TS_TOLERANCE_MS = 5 * 60_000
-const IDLE_MSG = 'Idle guard: read /areas/open-items.md and every /areas/*-backlog.md via memory_read, dispatch what needs no J input, then clear.'
+const IDLE_MSG = 'Idle guard: read /areas/open-items.md and every /areas/*-backlog.md via memory_read, dispatch what needs no J input, reply only "Idle guard fired re: <≤5 words>".'
 
 // running-proof: a reply's "(running" needs a launch id from a tool result this turn, or one from an
 // earlier turn of the session that no notification has reported finished yet.
@@ -32,6 +98,16 @@ const NOTE_FINAL = /<status>\s*(completed|failed|killed|stopped|cancelled|error)
 const LEDGER_RM = /(^|[\s;&|(])rm\b[^;&|\n]*?(\s["']?\$\{?L\}?["']?(?=$|[\s;&|)])|(~|\$HOME)?\/?\.claude\/orchestrator\/)/
 // "(needs you)" is the legitimate footer for work waiting on J, so it is no idle miss.
 const NEEDS_J = /\(needs you\)/i
+// parked-fix: a fix named ("should be a cheap fix", "needs to be fixed") with no launch id and no write-type tool this turn.
+const PARKED = /\b(should|could|would|will|can) be (a |an )?(cheap|quick|easy|small|simple|trivial|one-line|minor)\b[^.\n]{0,40}\b(fix|change|patch|tweak|edit)\b|\b(worth|needs|needs to be|should be|could be|to be) (fixed|fixing|patched|adding|added|changed)\b|\bcheap (page |ui )?fix\b|\b(propos(e|ing)|suggest(ing)?) (that|this|it)\b|\bcheaper next time\b|\bnext time[:,]? (keep|use|do|add|run)\b/i
+const WRITE_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'Artifact'])
+export const parkedFix = (answer: string, acted: boolean): boolean => !acted && !NEEDS_J.test(answer) && PARKED.test(answer)
+// miss-landing: a line opening "Miss:" / "Correction:" / "Gap:" (after markdown bold or bullets) names a miss;
+// it must land a fix (write-type or memory-write tool, or a launch id) or say no fix is needed.
+const MISS = /^[ \t]*(?:[-*+•][ \t]+)?(?:\*\*|__)?[ \t]*(?:miss|correction|gap)[ \t]*:/im
+const MISS_OK = /no fix|no rule change|already covers|existing rule|\(needs you\)/i
+const LANDING_TOOL = /(^|__)propose_skills$|memory_(write|append|str_replace)$/
+export const missUnlanded = (answer: string, landed: boolean): boolean => !landed && MISS.test(answer) && !MISS_OK.test(answer)
 const IDLE_TEXT = /ledger cleared|queue empty|nothing (is )?(running|queued|due)|all (items )?blocked|(blocked|waiting) on J\b|\b(going|staying|remain(ing)?|now|am|i'm) idle\b|\bidle until\b/i
 
 // board-timestamp: the first `updated` in an ArtifactData write (data, or writes[].data) that is not
@@ -125,14 +201,20 @@ async function openCount($: EngineInterface): Promise<number> {
 
 export const register: Register = on => {
   let count = 0
+  let turnFired = false // the 4th-call reminder fires at most once per turn
   let handoffTurn = false // the handoff skill was loaded this main turn: no 4th-call reminder
   let pendingHandoff = false // a /handoff slash command was submitted; its turn is a handoff turn
   let proof = false // a launch id came back this main turn
+  let acted = false // a write-type tool ran on the main thread this turn
+  let landed = false // a write, memory-write or skill-proposal tool ran on the main thread this turn
   let stampFired = false // the board-timestamp lint went out this main turn
   let idleFired = false // the idle-guard reminder went out this main turn
   let fromGuard = false // this main turn began with the guard's own continuation prompt
   let submitted = false // the guard submitted a continuation not yet started
   let carry: string | undefined // the end-of-turn line, for the model with the next prompt only
+  let injected: string | undefined // the session id this module last injected the card for
+  let dueId: string | undefined // the session id the owed card is for
+  let cardDue = false // a chat-start card is owed to the prompt in flight
 
   // Once per chat: attach the orchestrator instruction to the first prompt, before the model's first reply.
   // Re-arms on a new session id (startup, /clear), so it needs no SessionStart hook.
@@ -146,23 +228,50 @@ export const register: Register = on => {
       e = { ...e, context: [...(e.context ?? []), carry] }
       carry = undefined
     }
-    const id = await $.session.id()
-    if ((await $.state.get(remindedSession)).value === id) return next(e)
-    const stored = await $.store.get(STORE_KEY)
+    // Each read is tolerant: a failing session/state/store API can't skip the injection, and the
+    // module-local `injected` keeps it once per chat when state and store both fail.
+    const id = await Promise.resolve().then(() => $.session.id()).catch(() => '?')
+    if (injected === id) return next(e)
+    if ((await Promise.resolve().then(() => $.state.get(remindedSession)).catch(() => undefined))?.value === id) return next(e)
+    const stored = await Promise.resolve().then(() => $.store.get(STORE_KEY)).catch(() => undefined)
     const seen = Array.isArray(stored) ? stored.filter((x): x is string => typeof x === 'string') : []
-    await $.state.set(remindedSession, id)
-    if (seen.includes(id)) return next(e)
-    await $.store.set(STORE_KEY, [...seen, id].slice(-KEEP))
-    return next({ ...e, context: [...(e.context ?? []), START_MSG] })
-  }).catch(($, e, next) => next(e))
+    if (seen.includes(id)) {
+      injected = id
+      await $.state.set(remindedSession, id).catch(() => undefined)
+      return next(e)
+    }
+    // Card build never throws (embedded fallback), and the once-per-chat slot (state + store) is
+    // spent only after the injected prompt went through, so no throw can skip the injection.
+    dueId = id
+    cardDue = true // from here a throw still injects (see .catch), until next() is called
+    let card: { msg: string; info?: CardInfo }
+    try { card = await cardMsg($) } catch { card = { msg: fallbackCard() } }
+    cardDue = false
+    const ran = await next({ ...e, context: [...(e.context ?? []), START_MSG, card.msg] })
+    injected = id
+    try {
+      await $.state.set(remindedSession, id)
+      await $.store.set(STORE_KEY, [...seen, id].slice(-KEEP))
+      if (card.info !== undefined) await $.store.set('lastCard', card.info)
+    } catch {}
+    return ran
+  }).catch(($, e, next) => {
+    if (!cardDue) return next(e)
+    cardDue = false
+    injected = dueId
+    return next({ ...e, context: [...(e.context ?? []), START_MSG, fallbackCard()] })
+  })
 
   // Main loop only: a new main turn (user message or agent notification) resets the count.
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
       count = 0
+      turnFired = false
       handoffTurn = pendingHandoff
       pendingHandoff = false
       proof = false
+      acted = false
+      landed = false
       idleFired = false
       stampFired = false
       fromGuard = submitted || e.text.trimStart().startsWith(GUARD_TAG)
@@ -178,9 +287,12 @@ export const register: Register = on => {
     const notes: string[] = []
     // A handoff resume/write turn is a short fixed sequence; handing it to an agent only slows it.
     if (e.tool === 'Skill' && /(^|:)handoff$/.test(String((e as Record<string, unknown>).skill ?? ''))) handoffTurn = true
-    if (!EXEMPT.has(e.tool)) {
+    if (!exempt(e.tool)) {
       count += 1
-      if (count === LIMIT + 1 && !handoffTurn) notes.push(TURN_MSG)
+      if (count >= LIMIT + 1 && !turnFired && !handoffTurn && !finishing(e as Record<string, unknown>)) {
+        turnFired = true
+        notes.push(TURN_MSG)
+      }
     }
     if (e.tool === 'Bash' && !e.run_in_background && LONG.test(e.command)) notes.push(BASH_MSG)
     if (e.tool === 'Bash' && !idleFired && removesLedger(e.command)) {
@@ -194,6 +306,8 @@ export const register: Register = on => {
         notes.push(miss)
       }
     }
+    if (WRITE_TOOLS.has(e.tool)) acted = true
+    if (WRITE_TOOLS.has(e.tool) || LANDING_TOOL.test(e.tool)) landed = true
     const ran = await next(e)
     const id = launched(e.tool, ran)
     if (id !== undefined) {
@@ -217,6 +331,9 @@ export const register: Register = on => {
     let line: string | undefined
     if (RUNNING.test(e.answer) && unproven(e.answer, proof || (await openCount($)) > 0)) line = RUNNING_MSG
     else if (!idleFired && IDLE_TEXT.test(e.answer) && !NEEDS_J.test(e.answer)) line = IDLE_MSG
+    // miss-landing wins over parked-fix: a turn gets at most one of the two lines.
+    if (missUnlanded(e.answer, proof || landed)) line = MISS_MSG
+    else if (line === undefined && parkedFix(e.answer, proof || acted)) line = PARKED_MSG
     let continued = false
     if (line === IDLE_MSG) {
       idleFired = true
