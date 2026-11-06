@@ -92,7 +92,7 @@ const VERIFIED = /(?<![\w"'`“‘])(?<!un)verified\b(?!["'`”’])/i
 const SOURCE = /https?:\/\/|\]\(|(^|[\s(`])\/[\w.-]+\/|\bsource:/i
 const UNCHECKED = /(?<![\w"'`“‘])(unverified|to be confirmed|TBC|\[(confirm|check|verify)\b)(?!["'`”’])/i
 const verifyMsg = (n: number, m: number) =>
-  `verify-proof: ${[n ? `${n} "verified" with no source on its line` : '', m ? `${m} unverified/TBC markers` : ''].filter(Boolean).join(', ')} — add the source or check it now with own tools.`
+  `verify-proof: ${[n ? `${n} "verified" with no source and verbatim quote on its line` : '', m ? `${m} unverified/TBC markers` : ''].filter(Boolean).join(', ')} — add the source or check it now with own tools.`
 // promise-proof: an Efficiency/Prevention line or "from now on" with no write or dispatch this turn.
 const PROMISE = /^[\s>*_-]*(\*\*)?(Efficiency|Prevention):(\*\*)?\s*(?!(\*\*)?none\b)[^\s*]|\bfrom now on\b/im
 const WRITE_TOOL = /^(Edit|Write|NotebookEdit|Bash|ArtifactData|Artifact|Agent|Task|SendMessage)$|memory_(?!read|list|search)\w+$|__(update|batch|create|create_trigger|send_later)$/
@@ -274,10 +274,15 @@ export const offers = (answer: string): boolean => {
 // [unsourced "verified" lines, unverified/TBC markers]; blockquoted drafts count.
 // A "Sources:" line anywhere in the answer sources every "verified" in it.
 const SOURCES_LINE = /^[\s>*_-]*(\*\*)?Sources?:/im
+// A "verified" line also needs a verbatim quoted span (“…”, "…" or a > blockquote) on that line or the next: a bare link can't be checked at a glance.
+// "Checked and dropped/ruled out" is a verified claim in disguise (dropping an option on an unquoted reason).
+const RULED_OUT = /\bchecked and (dropped|ruled out)\b/i
+const QUOTE = /“[^”]{4,}”|"[^"\n]{4,}"|^\s*>\s*\S/m
 export const unverified = (answer: string): [number, number] => {
   const lines = proseLines(answer)
   const sourced = SOURCES_LINE.test(lines.join('\n'))
-  return [sourced ? 0 : lines.filter(l => VERIFIED.test(l) && !SOURCE.test(l)).length, lines.filter(l => UNCHECKED.test(l)).length]
+  const bad = lines.filter((l, i) => (VERIFIED.test(l) || RULED_OUT.test(l)) && ((!sourced && !SOURCE.test(l)) || !QUOTE.test(`${l}\n${lines[i + 1] ?? ''}`))).length
+  return [bad, lines.filter(l => UNCHECKED.test(l)).length]
 }
 export const promises = (answer: string): boolean => proseLines(answer).some(l => PROMISE.test(l))
 export const writes = (tool: string): boolean => WRITE_TOOL.test(tool)
