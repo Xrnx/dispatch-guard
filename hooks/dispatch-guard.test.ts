@@ -570,13 +570,13 @@ test('offer-guard: an answer ending on an offer gets one line; (needs you) and D
   expect(await done($, 't5', 'Queue empty, all dispatched.')).not.toMatch(/offer-guard/)
 })
 
-test('verify-proof: "verified" with no source on its line, or unverified/TBC markers, get one line', async ($, on) => {
+test('verify-proof: "verified" with no source and verbatim quote on its line, or unverified/TBC markers, get one line', async ($, on) => {
   engine(on)
   const r = await done($, 't1', '**Verified** no duty on transmission.\n- Sch 4 title [confirm]\n- cap is unverified')
-  expect(r).toMatch(/verify-proof: 1 "verified" with no source on its line, 2 unverified\/TBC markers/)
+  expect(r).toMatch(/verify-proof: 1 "verified" with no source and verbatim quote on its line, 2 unverified\/TBC markers/)
   expect(r.split('\n').length).toBe(1)
-  expect(await done($, 't2', '**Verified**: s 4(1) — https://sso.agc.gov.sg/Act/SDA1929')).not.toMatch(/verify-proof/)
-  expect(await done($, 't3', 'Verified — source: /areas/recent-work.md')).not.toMatch(/verify-proof/)
+  expect(await done($, 't2', '**Verified**: s 4(1) — https://sso.agc.gov.sg/Act/SDA1929 "no duty is payable"')).not.toMatch(/verify-proof/)
+  expect(await done($, 't3', 'Verified — source: /areas/recent-work.md “Cayman SPA signed”')).not.toMatch(/verify-proof/)
   expect(await done($, 't4', 'Label each claim "verified" or "unverified" per the rule.')).not.toMatch(/verify-proof/)
 })
 
@@ -622,8 +622,8 @@ const ask = async ($: any, id: string, prompt: string, answer: string, calls: an
 
 test('verify-proof: a Sources: line anywhere sources every "verified" in the answer', async ($, on) => {
   engine(on)
-  expect(await done($, 't1', '**Verified** no cap.\n\nSources: [Help](https://support.claude.com/x)')).not.toMatch(/verify-proof/)
-  expect(await done($, 't2', '**Verified** no cap.\n- cap [confirm]\n\nSources: [Help](https://support.claude.com/x)')).toMatch(/verify-proof: 1 unverified/)
+  expect(await done($, 't1', '**Verified** no cap: "no weekly cap applies".\n\nSources: [Help](https://support.claude.com/x)')).not.toMatch(/verify-proof/)
+  expect(await done($, 't2', '**Verified** no cap: "no weekly cap applies".\n- cap [confirm]\n\nSources: [Help](https://support.claude.com/x)')).toMatch(/verify-proof: 1 unverified/)
 })
 
 test('idle-guard: "nothing running" in the Next: footer is not an idle claim', async ($, on) => {
@@ -673,4 +673,14 @@ test('reask-guard: a re-ask adds context before the answer; an answer without Co
   expect(await ask($, 't1', 'verified where?', 'The fixed duties page.')).toMatch(/reask-guard: J re-asked/)
   expect(await ask($, 't2', 'verified where?', 'Correction: not on that page; unverified until adjudicated.')).not.toMatch(/reask-guard/)
   expect(await ask($, 't3', 'what is para 19', '**Verified** — para 19 is the dispute procedure. source: SPA p.40')).not.toMatch(/reask-guard/)
+})
+
+test('verify-proof: "verified" needs a verbatim quote on its line or the next, besides the source', async ($, on) => {
+  engine(on)
+  expect(await done($, 't1', '**Verified**: https://www.iras.gov.sg/x')).toMatch(/verify-proof: 1 "verified" with no source and verbatim quote/)
+  expect(await done($, 't2', '**Verified** — https://www.iras.gov.sg/x\n> not payable on vesting by operation of law')).not.toMatch(/verify-proof/)
+  expect(await done($, 't3', '**Verified** — [IRAS](https://www.iras.gov.sg/x)\n“not payable on vesting”')).not.toMatch(/verify-proof/)
+  expect(await done($, 't4', '**Verified**\n\nOther line "quoted words"\n\nSources: [IRAS](https://www.iras.gov.sg/x)')).toMatch(/verify-proof: 1/)
+  expect(await done($, 't5', 'Checked and dropped: Dygma Raise 2 (not a spacebar).\n\nSources: [Dygma](https://dygma.com/raise/)')).toMatch(/verify-proof: 1/)
+  expect(await done($, 't6', 'Checked and dropped: Dygma (no spacebar: "thumb keys only").\n\nSources: [Dygma](https://dygma.com/raise/)')).not.toMatch(/verify-proof/)
 })
