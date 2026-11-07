@@ -1,5 +1,5 @@
 {
-  "version": 8,
+  "version": 9,
   "checks": {
     "running-proof": {
       "patterns": {
@@ -41,7 +41,7 @@
     "parked-fix": {
       "patterns": {
         "fix": {
-          "source": "\\b(should|could|would|will|can) be (a |an )?(cheap|quick|easy|small|simple|trivial|one-line|minor)\\b[^.\\n]{0,40}\\b(fix|change|patch|tweak|edit)\\b|\\b(worth|needs|needs to be|should be|could be|to be) (fixed|fixing|patched|adding|added|changed)\\b|\\bcheap (page |ui )?fix\\b|\\b(propos(e|ing)|suggest(ing)?) (that|this|it)\\b|\\bcheaper next time\\b|\\bnext time[:,]? (keep|use|do|add|run)\\b|\\b(could|should|would|will|next time|worth|I'?d|one option is to)\\b[^.\\n]{0,40}\\b(fix|change|add|update|patch|tweak|edit|rewrite|remove|rename|cache)(es|ed|ing|s)?\\b",
+          "source": "\\b(should|could|would|will|can) be (a |an )?(cheap|quick|easy|small|simple|trivial|one-line|minor)\\b[^.\\n]{0,40}\\b(fix|change|patch|tweak|edit)\\b|\\b(worth|needs|needs to be|should be|could be|to be) (fixed|fixing|patched|adding|added|changed)\\b|\\bcheap (page |ui )?fix\\b|\\b(propos(e|ing)|suggest(ing)?) (that|this|it)\\b|\\bcheaper next time\\b|\\bnext time[:,]? (keep|use|do|add|run)\\b|\\b(could|should|would|will|next time|worth|I'?d|one option is to)\\b[^.\\n]{0,40}\\b(fix|change|add|update|patch|tweak|edit|rewrite|remove|rename|cache)(es|ed|ing|s)?\\b|🔶|\\b(?:partly|partial(?:ly)?|not yet built|not built|incomplete|half-?done|still missing)\\b",
           "flags": "i"
         }
       },
