@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "checks": {
     "running-proof": {
       "patterns": {
@@ -20,7 +20,7 @@
         }
       },
       "messages": {
-        "line": "Idle guard: read /areas/open-items.md and every /areas/*-backlog.md via memory_read, dispatch what needs no J input, reply only \"Idle guard fired re: <\u22645 words>\"."
+        "line": "Idle guard: memory_read /areas/open-items.md and every *-backlog.md (account and /projects/*/ folders), dispatch what needs no J input, reply only \"Idle guard fired re: <\u22645 words>\"."
       }
     },
     "miss-landing": {
@@ -171,7 +171,7 @@
     "eta-proof": {
       "patterns": {
         "eta": {
-          "source": "\\b(ETA|done)\\s*[:\u2248~]?\\s*~?\\d+\\s?(min|mins|minutes|h|hrs?)\\b",
+          "source": "\\b(ETA|done)\\s*[:\u2248~]?\\s*~?\\d+(?:\\s?[\u2013-]\\s?\\d+)?\\s?(min|mins|minutes|h|hrs?)\\b",
           "flags": "i"
         },
         "scaled": {
@@ -195,7 +195,7 @@
         }
       },
       "numbers": {
-        "minWords": 60
+        "minWords": 10
       },
       "messages": {
         "line": "checked-line: option ask answered with no \"checked: \u2026\" line \u2014 map the angles, list what was ruled out."
@@ -326,7 +326,7 @@
         ]
       },
       "numbers": {
-        "maxWords": 8
+        "maxWords": 30
       },
       "messages": {
         "context": "Scope: J said {phrases}. Honour it in every part of the answer."
@@ -340,7 +340,7 @@
         }
       },
       "numbers": {
-        "minCalls": 4
+        "minCalls": 2
       },
       "messages": {
         "line": "ask-first: ask to J held behind {n} calls \u2014 send asks the round they are known"
@@ -360,7 +360,7 @@
     "long-bash": {
       "patterns": {
         "hint": {
-          "source": "(^|[\\s;&|(])(node|python3?|npm\\s+(run\\s+)?test|npx\\s+playwright|playwright|sleep|pytest|make|cargo|go\\s+test)(\\s|$)",
+          "source": "(^|[\\s;&|(])(node|python3?|npm\\s+(run\\s+)?(test|build|ci|install)|npx|playwright|sleep|pytest|make|cargo|go\\s+(test|build)|tsc|vitest|jest|docker|pip3?\\s+install|git\\s+clone|rsync|gh\\s+run\\s+watch)(\\s|$)",
           "flags": ""
         }
       },
@@ -368,7 +368,7 @@
         "maxSeconds": 10
       },
       "messages": {
-        "hint": "Foreground Bash looks long-running (node/python/npm test/playwright/sleep) \u2014 use run_in_background or a background agent.",
+        "hint": "Foreground Bash builds/tests/installs/clones/waits \u2014 use run_in_background or a background agent.",
         "took": "Foreground Bash took {n}s \u2014 background it next time (run_in_background)."
       }
     },
@@ -417,7 +417,7 @@
         }
       },
       "numbers": {
-        "minSeconds": 10
+        "minSeconds": 1
       },
       "messages": {
         "note": "auto-backgrounded a wait so J's messages get through"
