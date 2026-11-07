@@ -1,0 +1,428 @@
+{
+  "version": 2,
+  "checks": {
+    "running-proof": {
+      "patterns": {
+        "claim": {
+          "source": "\\(running|\\brunning \\([^)\\n]{1,20}\\)",
+          "flags": "i"
+        }
+      },
+      "messages": {
+        "line": "(running) claimed but nothing launched this turn — start it or say not started."
+      }
+    },
+    "idle-guard": {
+      "patterns": {
+        "claim": {
+          "source": "ledger cleared|queue empty|nothing (is )?(running|queued|due)|all (items )?blocked|(blocked|waiting) on J\\b|\\b(going|staying|remain(ing)?|now|am|i'm) idle\\b|\\bidle until\\b",
+          "flags": "i"
+        }
+      },
+      "messages": {
+        "line": "Idle guard: read /areas/open-items.md and every /areas/*-backlog.md via memory_read, dispatch what needs no J input, reply only \"Idle guard fired re: <≤5 words>\"."
+      }
+    },
+    "miss-landing": {
+      "patterns": {
+        "miss": {
+          "source": "^[ \\t]*(?:[-*+•][ \\t]+)?(?:\\*\\*|__)?[ \\t]*(?:miss|correction|gap)[ \\t]*:",
+          "flags": "im"
+        },
+        "ok": {
+          "source": "no fix|no rule change|already covers|existing rule|\\(needs you\\)",
+          "flags": "i"
+        }
+      },
+      "messages": {
+        "line": "Miss named but nothing landed — fix it this turn (memory/skill/code) or say which existing rule covers it."
+      }
+    },
+    "parked-fix": {
+      "patterns": {
+        "fix": {
+          "source": "\\b(should|could|would|will|can) be (a |an )?(cheap|quick|easy|small|simple|trivial|one-line|minor)\\b[^.\\n]{0,40}\\b(fix|change|patch|tweak|edit)\\b|\\b(worth|needs|needs to be|should be|could be|to be) (fixed|fixing|patched|adding|added|changed)\\b|\\bcheap (page |ui )?fix\\b|\\b(propos(e|ing)|suggest(ing)?) (that|this|it)\\b|\\bcheaper next time\\b|\\bnext time[:,]? (keep|use|do|add|run)\\b|\\b(could|should|would|will|next time|worth|I'?d|one option is to)\\b[^.\\n]{0,40}\\b(fix|change|add|update|patch|tweak|edit|rewrite|remove|rename|cache)(es|ed|ing|s)?\\b",
+          "flags": "i"
+        }
+      },
+      "messages": {
+        "line": "Fix named but not started — dispatch it this turn (agent/edit/publish) or mark (needs you)."
+      }
+    },
+    "offer-guard": {
+      "patterns": {
+        "offer": {
+          "source": "\\b(want me to|shall I|should I|would you like|if you'?d like|say so|say the word|let me know if|just ping me|do you want)\\b|\\b(I|we) (can|could|will|'ll)\\b[^.?\\n]*\\b(if you|when you|should you)\\b|\\b(want|like)\\b[^.?\\n]{0,15}\\bme to\\b|\\b(happy|glad) to\\b(?! (report|say|see|hear|confirm))",
+          "flags": "i"
+        },
+        "decision": {
+          "source": "\\(needs you\\)|^\\s*\\**D\\d+\\b",
+          "flags": "im"
+        }
+      },
+      "messages": {
+        "line": "offer-guard: offer waiting on J — do it now if reversible, else mark it (needs you)."
+      }
+    },
+    "verify-proof": {
+      "patterns": {
+        "verified": {
+          "source": "(?<![\\w\"'`“‘])(?<!un)verified\\b(?![\"'`”’])",
+          "flags": "i"
+        },
+        "source": {
+          "source": "https?:\\/\\/|\\]\\(|(^|[\\s(`])\\/[\\w.-]+\\/|\\bsource:|\\b[\\w-]+\\.(?:com|org|net|gov|edu|io|sg)\\b|\\b(?:paras?|paragraphs?|cl|clauses?|ss?|sections?|sch|schedules?|arts?|articles?|regs?)\\.?\\s*\\d|\\b(?:against|in|per|from|on) the (?:pasted|attached|uploaded|provided|supplied|screenshot|draft)\\b",
+          "flags": "i"
+        },
+        "namedSite": {
+          "source": "https?:\\/\\/|\\]\\(|\\b[\\w-]+\\.(?:com|org|net|gov|edu|io|sg)\\b",
+          "flags": "i"
+        },
+        "inChat": {
+          "source": "\\bagainst the (?:pasted|attached|uploaded|provided|supplied)\\b",
+          "flags": "i"
+        },
+        "fileSrc": {
+          "source": "\\b[\\w-]+\\.(?:json|md|py|ts|tsx|js|jsx|yml|yaml|toml|txt|csv|xml|html|sh|ini|cfg|conf|lock)\\b|\\bthe [\\w.-]+ file\\b",
+          "flags": "i"
+        },
+        "unchecked": {
+          "source": "(?<![\\w\"'`“‘])(unverified|to be confirmed|TBC|\\[(confirm|check|verify)\\b)(?![\"'`”’])",
+          "flags": "i"
+        },
+        "sourcesLine": {
+          "source": "^[\\s>*_-]*(\\*\\*)?Sources?:",
+          "flags": "im"
+        },
+        "ruledOut": {
+          "source": "\\bchecked and (dropped|ruled out)\\b",
+          "flags": "i"
+        },
+        "quote": {
+          "source": "“[^”]{4,}”|\"[^\"\\n]{4,}\"|^\\s*>\\s*\\S",
+          "flags": "m"
+        }
+      },
+      "messages": {
+        "line": "verify-proof: {detail} — add the source or check it now with own tools.",
+        "verified": "{n} \"verified\" with no source and verbatim quote on its line",
+        "unchecked": "{n} unverified/TBC markers"
+      }
+    },
+    "promise-proof": {
+      "patterns": {
+        "promise": {
+          "source": "^[\\s>*_-]*(\\*\\*)?(Efficiency|Prevention):(\\*\\*)?\\s*(?!(\\*\\*)?none\\b)[^\\s*]|\\b(from now on|going forward|in future|next time|I'?ll (remember|make sure|always|never))\\b",
+          "flags": "im"
+        }
+      },
+      "messages": {
+        "line": "promise-proof: Efficiency/Prevention/\"from now on\" with no write or dispatch this turn — make the change now or delete the line."
+      }
+    },
+    "board-dispatch": {
+      "messages": {
+        "line": "Status board not updated for this dispatch — post it via ArtifactData this turn (same tool round as the ledger, after the reply is fine)."
+      }
+    },
+    "finish-row": {
+      "messages": {
+        "line": "agent finished — set its board row to done"
+      }
+    },
+    "orchestrator-proof": {
+      "messages": {
+        "line": "orchestrator-proof: orchestrator skill not loaded this chat — Skill-load 'orchestrator' before the next step."
+      }
+    },
+    "answer-first": {
+      "patterns": {
+        "question": {
+          "source": "^(is|isn'?t|are|aren'?t|does|doesn'?t|do|don'?t|did|didn'?t|can|can'?t|will|should|was|were|has|have|so)\\b[^?]*\\?",
+          "flags": "i"
+        },
+        "request": {
+          "source": "^(can|could|would|will) you\\b",
+          "flags": "i"
+        },
+        "answered": {
+          "source": "\\b(yes|no|nope|verified|unverified|inferred|partly|partially|correct|incorrect|wrong|right|true|false|depends)\\b",
+          "flags": "i"
+        }
+      },
+      "numbers": {
+        "firstWords": 12
+      },
+      "messages": {
+        "line": "answer-first: J asked a yes/no question — open with confidence + yes/no, then anything else."
+      }
+    },
+    "lookup-first": {
+      "patterns": {
+        "unknown": {
+          "source": "\\b(i (don'?t|do not) know|i'?m not sure|not sure (whether|if)|i can'?t (see|tell|access|check|verify)|no way (for me )?to (know|check|tell)|(send|share|give) me (a |the )?(screenshot|link|file|copy|figure)|(can|could) you (send|share|confirm|check|paste|tell me|upload|attach|provide))\\b|\\b(send|share|give|paste|upload|attach|provide|tell) me\\b|^(?![ \\t]*[|>]).*\\b(do you have|are you (on|using)|which [\\w-]+ (are|is|do) you|what('?s| is) your|where('?s| is) (the|your))\\b.*\\?[*_ \\t]*$",
+          "flags": "im"
+        }
+      },
+      "messages": {
+        "line": "lookup-first: unknown/asked J with no lookup this turn — search memory, chat history, files or web first."
+      }
+    },
+    "eta-proof": {
+      "patterns": {
+        "eta": {
+          "source": "\\b(ETA|done)\\s*[:≈~]?\\s*~?\\d+\\s?(min|mins|minutes|h|hrs?)\\b",
+          "flags": "i"
+        },
+        "scaled": {
+          "source": "×|\\(\\s*\\d+\\s?[x*]\\s?\\d",
+          "flags": ""
+        }
+      },
+      "messages": {
+        "line": "eta-proof: minute ETA with no E×R — scale by the calibration ratio before relaying."
+      }
+    },
+    "checked-line": {
+      "patterns": {
+        "ask": {
+          "source": "\\b(best|recommend|which|options?|alternatives?|should i|what about|anything else|compare|vs\\.?)\\b",
+          "flags": "i"
+        },
+        "checked": {
+          "source": "\\bchecked:",
+          "flags": "i"
+        }
+      },
+      "numbers": {
+        "minWords": 60
+      },
+      "messages": {
+        "line": "checked-line: option ask answered with no \"checked: …\" line — map the angles, list what was ruled out."
+      }
+    },
+    "dangling-ref": {
+      "patterns": {
+        "dRef": {
+          "source": "((?<!^(?:[^`\\n]*`[^`\\n]*`)*[^`\\n]*`[^`\\n]*)(?<!^(?:[^\"\\n]*\"[^\"\\n]*\")*[^\"\\n]*\"[^\"\\n]*)(?<![\"'`“‘])(?:(?:\\b[DQ]\\d{1,2}(?!\\s*(?:19|20)\\d\\d))|\\b(?:step|option|item|decision|question)\\s?(?:\\d{1,2}|[A-H])\\b|(?<=\\b(?:see|per|under|answer|pick|choose|option|item)\\s)\\((?:[a-h]|\\d{1,2})\\)))(?![\\w])",
+          "flags": "i"
+        },
+        "dDef": {
+          "source": "^[\\s>*_#-]*(?:\\*\\*|__)?((?:[DQ]\\d{1,2})|(?:step|option|item|decision|question)\\s?(?:\\d{1,2}|[A-H])|\\((?:[a-h]|\\d{1,2})\\))(?:(?:\\*\\*|__)?\\s*[.:)\\]—–-]|.*\\?\\s*$|\\s+\\S)",
+          "flags": "i"
+        },
+        "listDef": {
+          "source": "^\\s*(?:[-*•]\\s+)?\\(?([a-h]|\\d{1,2})[.)]\\s",
+          "flags": "i"
+        },
+        "below": {
+          "source": "\\b(?:see|listed|set out|as|shown|detailed|questions?|decisions?|options?|choices?|items?|list|details?)\\s+below\\b|\\bbelow\\s*:|\\(below\\)",
+          "flags": "i"
+        },
+        "belowDecision": {
+          "source": "\\b(questions?|decisions?|options?|choices?|D\\d+)\\b[^.]*\\bbelow\\b|\\bbelow\\b[^.]*\\b(questions?|decisions?|options?|choices?)\\b",
+          "flags": "i"
+        },
+        "nextMsg": {
+          "source": "\\b(?:to follow|shortly|in a (?:moment|sec)|once [^.\\n]{0,30}?\\b(?:lands|finishes|returns|is done)|(?:next|following|separate|another) (?:message|reply|turn))\\b",
+          "flags": "i"
+        },
+        "listish": {
+          "source": "\\b(ask|questions?|decisions?|options?|choices?|list|items?|details|D\\d+|decide|approve|confirm|answer|choose)\\b",
+          "flags": "i"
+        },
+        "askNoun": {
+          "source": "\\b(decide|approve|confirm|answer|choose|sign off)\\b",
+          "flags": "i"
+        },
+        "link": {
+          "source": "https?:\\/\\/|\\]\\(",
+          "flags": "i"
+        }
+      },
+      "messages": {
+        "line": "dangling reference: {refs} not in reply"
+      }
+    },
+    "reask-guard": {
+      "patterns": {
+        "reask": {
+          "source": "\\b(verified where|where is (this|that|it)\\b|why (did|do) you (say|think|use|put)|are you sure|is it really|no,? it'?s a question|i (just|already) (told|said)|repeat(ing)? myself|you (forgot|missed|ignored)|not what i (asked|said|meant)|what is (para|paragraph|cl|clause|s|section|sch|schedule)\\b|that'?s (wrong|not right))|\\b(what|which|where)(?:'?s|\\s+is|\\s+are)?\\s+(?:the\\s+)?[A-Za-z]{1,10}\\.?\\s?\\d[\\w.]*",
+          "flags": "i"
+        },
+        "ok": {
+          "source": "^[\\s>*_-]*(\\*\\*)?Correction:|\\b(verified|unverified|inferred)\\b",
+          "flags": "im"
+        }
+      },
+      "messages": {
+        "context": "reask-guard: J is correcting or re-asking. Re-open the source and quote the line; answer his literal question first; then Correction:/Prevention: if wrong.",
+        "line": "reask-guard: J re-asked; answer has no Correction: line or confidence label — re-check the source and add one."
+      }
+    },
+    "style": {
+      "numbers": {
+        "maxWords": 20
+      },
+      "messages": {
+        "line": "Style: {n} points over {max} words last reply — fragments, ≤{max} words per point."
+      }
+    },
+    "scope-quote": {
+      "patterns": {
+        "list": [
+          {
+            "source": "\\bnot just\\s+[^\\s.?!,;]+(?:\\s+[^\\s.?!,;]+){0,3}",
+            "flags": "i"
+          },
+          {
+            "source": "\\b(?:just|only)\\s+(?:the\\s+)?(?:\\(?[a-z0-9]{1,2}\\)?(?:\\s*,\\s*|\\s+and\\s+|\\s*&\\s*))+\\(?[a-z0-9]{1,2}\\)?\\b",
+            "flags": "i"
+          },
+          {
+            "source": "\\b(?:just|only)\\s+(?:the\\s+)?(?:top\\s+|first\\s+|last\\s+)?\\d+(?:\\s+[a-z]+)?",
+            "flags": "i"
+          },
+          {
+            "source": "\\b(?:just|only)\\s+(?:the\\s+)?(?:paras?|paragraphs?|clauses?|sections?|schedules?|heads?|items?|keys?|rows?|columns?)\\s+[\\w-]+",
+            "flags": "i"
+          },
+          {
+            "source": "\\bonly\\s+(?:the|in|from|those|these|include|list|show)\\s+[\\w-]+(?:\\s+[\\w-]+){0,2}",
+            "flags": "i"
+          },
+          {
+            "source": "\\b(?:except|excluding|apart from|other than)\\s+(?:the\\s+)?[\\w-]+(?:\\s+[\\w-]+){0,2}",
+            "flags": "i"
+          },
+          {
+            "source": "\\b(?:at least|at most|no more than|no fewer than|no less than|up to|a maximum of|a minimum of)\\s+\\d+(?:\\s+[a-z]+)?",
+            "flags": "i"
+          },
+          {
+            "source": "\\b\\d+\\s?(?:keys?|words?|characters?|chars|lines?|pages?|bullets?|points?)\\b",
+            "flags": "i"
+          },
+          {
+            "source": "\\bboth\\s+[\\w-]+(?:\\s+[\\w-]+){0,2}?\\s+and\\s+[\\w-]+",
+            "flags": "i"
+          },
+          {
+            "source": "\\ball of (?:the|these|those)\\s+[\\w-]+",
+            "flags": "i"
+          },
+          {
+            "source": "\\band also\\s+[\\w-]+(?:\\s+[\\w-]+){0,2}",
+            "flags": "i"
+          },
+          {
+            "source": "\\b(?:finish|use up|exhaust)\\s+(?:the|my|all)\\s+(?:limit|quota|allowance|budget|cap)\\b",
+            "flags": "i"
+          },
+          {
+            "source": "\\b(?:just|only|and|plus|also|as well as)\\s+(?:the\\s+)?[\\w-]+\\s+(?:ones?|versions?|variants?|types?|kinds?|models?)\\b",
+            "flags": "i"
+          }
+        ]
+      },
+      "numbers": {
+        "maxWords": 8
+      },
+      "messages": {
+        "context": "Scope: J said {phrases}. Honour it in every part of the answer."
+      }
+    },
+    "ask-first": {
+      "patterns": {
+        "ask": {
+          "source": "^(?![ \\t]*[|>]).*\\b(you|your)\\b.*\\?[*_ \\t]*$|^[\\s*_#-]*(?:\\*\\*|__)?[DQ]\\d{1,2}\\b.*\\?[*_ \\t]*$|\\(needs you\\)",
+          "flags": "im"
+        }
+      },
+      "numbers": {
+        "minCalls": 4
+      },
+      "messages": {
+        "line": "ask-first: ask to J held behind {n} calls — send asks the round they are known"
+      }
+    },
+    "ask-standout": {
+      "patterns": {
+        "ask": {
+          "source": "\\b(you|your)\\b[^?]*\\?",
+          "flags": "i"
+        }
+      },
+      "messages": {
+        "line": "ask-standout: each ask to J on its own line, outside tables and quotes"
+      }
+    },
+    "long-bash": {
+      "patterns": {
+        "hint": {
+          "source": "(^|[\\s;&|(])(node|python3?|npm\\s+(run\\s+)?test|npx\\s+playwright|playwright|sleep|pytest|make|cargo|go\\s+test)(\\s|$)",
+          "flags": ""
+        }
+      },
+      "numbers": {
+        "maxSeconds": 10
+      },
+      "messages": {
+        "hint": "Foreground Bash looks long-running (node/python/npm test/playwright/sleep) — use run_in_background or a background agent.",
+        "took": "Foreground Bash took {n}s — background it next time (run_in_background)."
+      }
+    },
+    "upload-check": {
+      "patterns": {
+        "uploaded": {
+          "source": "\\buploaded\\b",
+          "flags": "i"
+        }
+      },
+      "numbers": {
+        "recentHours": 24
+      }
+    },
+    "night-nudge": {
+      "numbers": {
+        "startMin": 1320,
+        "tier2Min": 1380,
+        "tier3Min": 240,
+        "endMin": 480
+      },
+      "messages": {
+        "context": "Late-night message (tier: {line}). End the reply with one short (≤8 words), freshly worded sleep line fitting this tier; never repeat the last one's wording; never refuse, rush or lecture.",
+        "tier1": "wind-down 22–23, bed at 23:00",
+        "tier2": "past bedtime 23–04",
+        "tier3": "early hours 04–08, may not have slept"
+      }
+    },
+    "foreground-wait": {
+      "patterns": {
+        "sleep": {
+          "source": "(?:^|[\\s;&|(`{]|\\$\\()sleep\\s+(\\d+(?:\\.\\d+)?)([smhd]?)(?![\\w.])",
+          "flags": ""
+        },
+        "loop": {
+          "source": "(?:^|[\\s;&|(`{]|\\$\\()(?:while|until|for)\\s[\\s\\S]*?\\bdo\\b[\\s\\S]*?\\bsleep\\b",
+          "flags": ""
+        },
+        "timeout": {
+          "source": "(?:^|[\\s;&|(`{]|\\$\\()timeout\\s+(?:-{1,2}[\\w-]+(?:[=\\s]\\S+)?\\s+)*?(\\d+(?:\\.\\d+)?)([smhd]?)(?![\\w.])",
+          "flags": ""
+        },
+        "follow": {
+          "source": "(?:^|[;&|(`{\\n]|\\$\\()\\s*(?:sudo\\s+)?(?:tail\\s+(?:[^\\n;&|]*\\s)?(?:-[a-zA-Z]*[fF][a-zA-Z]*|--follow\\S*)(?!\\S)|watch\\s)",
+          "flags": ""
+        }
+      },
+      "numbers": {
+        "minSeconds": 10
+      },
+      "messages": {
+        "note": "auto-backgrounded a wait so J's messages get through"
+      }
+    }
+  },
+  "add": []
+}
