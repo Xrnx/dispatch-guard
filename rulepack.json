@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "checks": {
     "running-proof": {
       "patterns": {
@@ -500,7 +500,7 @@
       "id": "held-for-j",
       "on": "answer",
       "pattern": {
-        "source": "^(?![^\\n]*(?:\\bETA\\b|^\\W*(?:Action|Next|Needs you)\\b|\\(needs you\\)))[^\\n]*\\b(?:once|after|when|until|as soon as)\\s+(?:you(?:['’]ve| have|['’]ll| will)?|your)\\s+(?:(?:save|saved|saving|upload|uploaded|reply|replied|respond|responded|confirm|confirmed|approve|approved|paste|pasted|send|sent|answer|answered|install|installed|share|shared|review|reviewed|sign|signed)\\b|(?:have |has )?(?:saved|uploaded|replied|confirmed|approved|pasted|sent|answered|reviewed|signed)\\b)",
+        "source": "^(?![^\\n]*^\\W*Action\\b)[^\\n]*\\b(?:once|after|when|until|as soon as)\\s+(?:you(?:['’]ve| have|['’]ll| will)?|your)\\s+(?:(?:save|saved|saving|upload|uploaded|reply|replied|respond|responded|confirm|confirmed|approve|approved|paste|pasted|send|sent|answer|answered|install|installed|share|shared|review|reviewed|sign|signed)\\b|(?:have |has )?(?:saved|uploaded|replied|confirmed|approved|pasted|sent|answered|reviewed|signed)\\b)",
         "flags": "mi"
       },
       "message": "Held something behind a J step — send everything ready now (several calls if a tool caps per call)."
