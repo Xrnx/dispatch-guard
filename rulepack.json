@@ -1,5 +1,5 @@
 {
-  "version": 9,
+  "version": 10,
   "checks": {
     "running-proof": {
       "patterns": {
@@ -509,7 +509,7 @@
       "id": "correction-prevention",
       "on": "prompt",
       "pattern": {
-        "source": "\\b(?:should apply to|not just|how come|why did you|you forgot|should[’']?ve|should there be a prevention|I had to (?:say|point|send|tell)|why didn[’']t|does (?:this|that) (?:actually )?target|the whole problem|is that enough|does that cover|what about the rest)\\b",
+        "source": "^(?!\\s*[“\"])[\\s\\S]*?\\b(?:should apply to|not just|how come|why did you|you forgot|should[’']?ve|should there be a prevention|I had to (?:say|point|send|tell)|why didn[’']t|does (?:this|that) (?:actually )?target|the whole problem|is that enough|does that cover|what about the rest)\\b|^\\s*(?:“[^”]*”|\"[^\"]*\")[\\s\\S]*?\\b(?:should apply to|not just|how come|why did you|you forgot|should[’']?ve|should there be a prevention|I had to (?:say|point|send|tell)|why didn[’']t|does (?:this|that) (?:actually )?target|the whole problem|is that enough|does that cover|what about the rest)\\b",
         "flags": "i"
       },
       "message": "J is correcting you or probing a fix: include a Prevention: line fixing the cause (incl. why J, not Claude, spotted it) and settling J's likely follow-up (covers every case? why was J needed?).",
