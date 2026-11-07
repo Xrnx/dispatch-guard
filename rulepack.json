@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "checks": {
     "running-proof": {
       "patterns": {
@@ -9,7 +9,7 @@
         }
       },
       "messages": {
-        "line": "(running) claimed but nothing launched this turn — start it or say not started."
+        "line": "(running) claimed but nothing launched this turn \u2014 start it or say not started."
       }
     },
     "idle-guard": {
@@ -20,13 +20,13 @@
         }
       },
       "messages": {
-        "line": "Idle guard: read /areas/open-items.md and every /areas/*-backlog.md via memory_read, dispatch what needs no J input, reply only \"Idle guard fired re: <≤5 words>\"."
+        "line": "Idle guard: read /areas/open-items.md and every /areas/*-backlog.md via memory_read, dispatch what needs no J input, reply only \"Idle guard fired re: <\u22645 words>\"."
       }
     },
     "miss-landing": {
       "patterns": {
         "miss": {
-          "source": "^[ \\t]*(?:[-*+•][ \\t]+)?(?:\\*\\*|__)?[ \\t]*(?:miss|correction|gap)[ \\t]*:",
+          "source": "^[ \\t]*(?:[-*+\u2022][ \\t]+)?(?:\\*\\*|__)?[ \\t]*(?:miss|correction|gap)[ \\t]*:",
           "flags": "im"
         },
         "ok": {
@@ -35,7 +35,7 @@
         }
       },
       "messages": {
-        "line": "Miss named but nothing landed — fix it this turn (memory/skill/code) or say which existing rule covers it."
+        "line": "Miss named but nothing landed \u2014 fix it this turn (memory/skill/code) or say which existing rule covers it."
       }
     },
     "parked-fix": {
@@ -46,7 +46,7 @@
         }
       },
       "messages": {
-        "line": "Fix named but not started — dispatch it this turn (agent/edit/publish) or mark (needs you)."
+        "line": "Fix named but not started \u2014 dispatch it this turn (agent/edit/publish) or mark (needs you)."
       }
     },
     "offer-guard": {
@@ -61,13 +61,13 @@
         }
       },
       "messages": {
-        "line": "offer-guard: offer waiting on J — do it now if reversible, else mark it (needs you)."
+        "line": "offer-guard: offer waiting on J \u2014 do it now if reversible, else mark it (needs you)."
       }
     },
     "verify-proof": {
       "patterns": {
         "verified": {
-          "source": "(?<![\\w\"'`“‘])(?<!un)verified\\b(?![\"'`”’])",
+          "source": "(?<![\\w\"'`\u201c\u2018])(?<!un)verified\\b(?![\"'`\u201d\u2019])",
           "flags": "i"
         },
         "source": {
@@ -87,7 +87,7 @@
           "flags": "i"
         },
         "unchecked": {
-          "source": "(?<![\\w\"'`“‘])(unverified|to be confirmed|TBC|\\[(confirm|check|verify)\\b)(?![\"'`”’])",
+          "source": "(?<![\\w\"'`\u201c\u2018])(unverified|to be confirmed|TBC|\\[(confirm|check|verify)\\b)(?![\"'`\u201d\u2019])",
           "flags": "i"
         },
         "sourcesLine": {
@@ -99,12 +99,12 @@
           "flags": "i"
         },
         "quote": {
-          "source": "“[^”]{4,}”|\"[^\"\\n]{4,}\"|^\\s*>\\s*\\S",
+          "source": "\u201c[^\u201d]{4,}\u201d|\"[^\"\\n]{4,}\"|^\\s*>\\s*\\S",
           "flags": "m"
         }
       },
       "messages": {
-        "line": "verify-proof: {detail} — add the source or check it now with own tools.",
+        "line": "verify-proof: {detail} \u2014 add the source or check it now with own tools.",
         "verified": "{n} \"verified\" with no source and verbatim quote on its line",
         "unchecked": "{n} unverified/TBC markers"
       }
@@ -117,22 +117,22 @@
         }
       },
       "messages": {
-        "line": "promise-proof: Efficiency/Prevention/\"from now on\" with no write or dispatch this turn — make the change now or delete the line."
+        "line": "promise-proof: Efficiency/Prevention/\"from now on\" with no write or dispatch this turn \u2014 make the change now or delete the line."
       }
     },
     "board-dispatch": {
       "messages": {
-        "line": "Status board not updated for this dispatch — post it via ArtifactData this turn (same tool round as the ledger, after the reply is fine)."
+        "line": "Status board not updated for this dispatch \u2014 post it via ArtifactData this turn (same tool round as the ledger, after the reply is fine)."
       }
     },
     "finish-row": {
       "messages": {
-        "line": "agent finished — set its board row to done"
+        "line": "agent finished \u2014 set its board row to done"
       }
     },
     "orchestrator-proof": {
       "messages": {
-        "line": "orchestrator-proof: orchestrator skill not loaded this chat — Skill-load 'orchestrator' before the next step."
+        "line": "orchestrator-proof: orchestrator skill not loaded this chat \u2014 Skill-load 'orchestrator' before the next step."
       }
     },
     "answer-first": {
@@ -154,7 +154,7 @@
         "firstWords": 12
       },
       "messages": {
-        "line": "answer-first: J asked a yes/no question — open with confidence + yes/no, then anything else."
+        "line": "answer-first: J asked a yes/no question \u2014 open with confidence + yes/no, then anything else."
       }
     },
     "lookup-first": {
@@ -165,22 +165,22 @@
         }
       },
       "messages": {
-        "line": "lookup-first: unknown/asked J with no lookup this turn — search memory, chat history, files or web first."
+        "line": "lookup-first: unknown/asked J with no lookup this turn \u2014 search memory, chat history, files or web first."
       }
     },
     "eta-proof": {
       "patterns": {
         "eta": {
-          "source": "\\b(ETA|done)\\s*[:≈~]?\\s*~?\\d+\\s?(min|mins|minutes|h|hrs?)\\b",
+          "source": "\\b(ETA|done)\\s*[:\u2248~]?\\s*~?\\d+\\s?(min|mins|minutes|h|hrs?)\\b",
           "flags": "i"
         },
         "scaled": {
-          "source": "×|\\(\\s*\\d+\\s?[x*]\\s?\\d",
+          "source": "\u00d7|\\(\\s*\\d+\\s?[x*]\\s?\\d",
           "flags": ""
         }
       },
       "messages": {
-        "line": "eta-proof: minute ETA with no E×R — scale by the calibration ratio before relaying."
+        "line": "eta-proof: minute ETA with no E\u00d7R \u2014 scale by the calibration ratio before relaying."
       }
     },
     "checked-line": {
@@ -198,21 +198,21 @@
         "minWords": 60
       },
       "messages": {
-        "line": "checked-line: option ask answered with no \"checked: …\" line — map the angles, list what was ruled out."
+        "line": "checked-line: option ask answered with no \"checked: \u2026\" line \u2014 map the angles, list what was ruled out."
       }
     },
     "dangling-ref": {
       "patterns": {
         "dRef": {
-          "source": "((?<!^(?:[^`\\n]*`[^`\\n]*`)*[^`\\n]*`[^`\\n]*)(?<!^(?:[^\"\\n]*\"[^\"\\n]*\")*[^\"\\n]*\"[^\"\\n]*)(?<![\"'`“‘])(?:(?:\\b[DQ]\\d{1,2}(?!\\s*(?:19|20)\\d\\d))|\\b(?:step|option|item|decision|question)\\s?(?:\\d{1,2}|[A-H])\\b|(?<=\\b(?:see|per|under|answer|pick|choose|option|item)\\s)\\((?:[a-h]|\\d{1,2})\\)))(?![\\w])",
+          "source": "((?<!^(?:[^`\\n]*`[^`\\n]*`)*[^`\\n]*`[^`\\n]*)(?<!^(?:[^\"\\n]*\"[^\"\\n]*\")*[^\"\\n]*\"[^\"\\n]*)(?<![\"'`\u201c\u2018])(?:(?:\\b[DQ]\\d{1,2}(?!\\s*(?:19|20)\\d\\d))|\\b(?:step|option|item|decision|question)\\s?(?:\\d{1,2}|[A-H])\\b|(?<=\\b(?:see|per|under|answer|pick|choose|option|item)\\s)\\((?:[a-h]|\\d{1,2})\\)))(?![\\w])",
           "flags": "i"
         },
         "dDef": {
-          "source": "^[\\s>*_#-]*(?:\\*\\*|__)?((?:[DQ]\\d{1,2})|(?:step|option|item|decision|question)\\s?(?:\\d{1,2}|[A-H])|\\((?:[a-h]|\\d{1,2})\\))(?:(?:\\*\\*|__)?\\s*[.:)\\]—–-]|.*\\?\\s*$|\\s+\\S)",
+          "source": "^[\\s>*_#-]*(?:\\*\\*|__)?((?:[DQ]\\d{1,2})|(?:step|option|item|decision|question)\\s?(?:\\d{1,2}|[A-H])|\\((?:[a-h]|\\d{1,2})\\))(?:(?:\\*\\*|__)?\\s*[.:)\\]\u2014\u2013-]|.*\\?\\s*$|\\s+\\S)",
           "flags": "i"
         },
         "listDef": {
-          "source": "^\\s*(?:[-*•]\\s+)?\\(?([a-h]|\\d{1,2})[.)]\\s",
+          "source": "^\\s*(?:[-*\u2022]\\s+)?\\(?([a-h]|\\d{1,2})[.)]\\s",
           "flags": "i"
         },
         "below": {
@@ -257,7 +257,7 @@
       },
       "messages": {
         "context": "reask-guard: J is correcting or re-asking. Re-open the source and quote the line; answer his literal question first; then Correction:/Prevention: if wrong.",
-        "line": "reask-guard: J re-asked; answer has no Correction: line or confidence label — re-check the source and add one."
+        "line": "reask-guard: J re-asked; answer has no Correction: line or confidence label \u2014 re-check the source and add one."
       }
     },
     "style": {
@@ -265,7 +265,7 @@
         "maxWords": 20
       },
       "messages": {
-        "line": "Style: {n} points over {max} words last reply — fragments, ≤{max} words per point."
+        "line": "Style: {n} points over {max} words last reply \u2014 fragments, \u2264{max} words per point."
       }
     },
     "scope-quote": {
@@ -343,7 +343,7 @@
         "minCalls": 4
       },
       "messages": {
-        "line": "ask-first: ask to J held behind {n} calls — send asks the round they are known"
+        "line": "ask-first: ask to J held behind {n} calls \u2014 send asks the round they are known"
       }
     },
     "ask-standout": {
@@ -368,8 +368,8 @@
         "maxSeconds": 10
       },
       "messages": {
-        "hint": "Foreground Bash looks long-running (node/python/npm test/playwright/sleep) — use run_in_background or a background agent.",
-        "took": "Foreground Bash took {n}s — background it next time (run_in_background)."
+        "hint": "Foreground Bash looks long-running (node/python/npm test/playwright/sleep) \u2014 use run_in_background or a background agent.",
+        "took": "Foreground Bash took {n}s \u2014 background it next time (run_in_background)."
       }
     },
     "upload-check": {
@@ -391,10 +391,10 @@
         "endMin": 480
       },
       "messages": {
-        "context": "Late-night message (tier: {line}). End the reply with one short (≤8 words), freshly worded sleep line fitting this tier; never repeat the last one's wording; never refuse, rush or lecture.",
-        "tier1": "wind-down 22–23, bed at 23:00",
-        "tier2": "past bedtime 23–04",
-        "tier3": "early hours 04–08, may not have slept"
+        "context": "Late-night message (tier: {line}). End the reply with one short (\u22648 words), freshly worded sleep line fitting this tier; never repeat the last one's wording; never refuse, rush or lecture.",
+        "tier1": "wind-down 22\u201323, bed at 23:00",
+        "tier2": "past bedtime 23\u201304",
+        "tier3": "early hours 04\u201308, may not have slept"
       }
     },
     "foreground-wait": {
@@ -424,5 +424,15 @@
       }
     }
   },
-  "add": []
+  "add": [
+    {
+      "id": "legal-cite-source",
+      "on": "answer",
+      "pattern": {
+        "source": "^(?![^\\n]*(?:https?://|\\(inferred\\)|\\bunverified\\b|[\"\u201c\u201d][^\"\u201c\u201d\\n]{8,}[\"\u201c\u201d]))[^\\n]*(?:\\b(?:ss?|[Ss]ec|[Ss]ections?)\\.? ?\\d+[A-Z]?(?:\\([a-zA-Z0-9]+\\))+|\\bss?\\.? \\d+[A-Z]?\\b|\\b[Ss]ections? \\d+[A-Z]?\\b(?= of\\b|,|;|\\.|\\)| and\\b| applies| requires| provides)|\\b[A-Z][A-Za-z]+(?: (?:and |of |the )?[A-Z][A-Za-z]+)* Act\\b|\\b(?:Rule|Reg|Regs|Regulation|Regulations|Article|Art)\\.? \\d+|\\[\\d{4}\\] (?:\\d+ )?[A-Z][A-Za-z]*(?: [A-Za-z]+)? \\d+)",
+        "flags": "m"
+      },
+      "message": "legal citation without a source on the same line \u2014 add the source link/quote or tag (inferred)"
+    }
+  ]
 }
