@@ -1,5 +1,5 @@
 {
-  "version": 10,
+  "version": 12,
   "checks": {
     "running-proof": {
       "patterns": {
@@ -238,10 +238,30 @@
         "link": {
           "source": "https?:\\/\\/|\\]\\(",
           "flags": "i"
+        },
+        "code": {
+          "source": "(?<![\\w$£€.#\\/-])(?![vV]\\d|[DQ]\\d|(?:s|ss|r|pr|reg|art|cl)\\d)([a-z]{1,2}\\d{1,3}[a-z]?|[A-Z]\\d{1,2})(?![\\w%$]|[./-]\\d|-[A-Z])",
+          "flags": ""
+        },
+        "workLabel": {
+          "source": "\\b((?:batch|test|run|wave|round|track|workstream|task|check|bucket|tier|group|slot|lane|job|queue)\\s?#?\\d{1,3})(?![.-]?\\w|\\s?[×x](?!\\w))",
+          "flags": "i"
+        },
+        "brand": {
+          "source": "(?:^|\\W)[A-Z][A-Za-z]+[ -]$",
+          "flags": ""
+        },
+        "product": {
+          "source": "^\\s?(?:[A-Z][a-z]|(?:model|chip|series|edition|version|kit|board|keyboard|phone|laptop|camera|lens|processor|cpu|gpu|switch(?:es)?)\\b)",
+          "flags": ""
+        },
+        "gloss": {
+          "source": "^\\s*(?:\\(|:|=|—|–| - |,\\s(?:the|a|an|i\\.e\\.|which|meaning|our|my)\\b)",
+          "flags": "i"
         }
       },
       "messages": {
-        "line": "dangling reference: {refs} not in reply"
+        "line": "dangling reference: {refs} not in reply or J's words — define on first use"
       }
     },
     "reask-guard": {
@@ -265,7 +285,8 @@
         "maxWords": 20
       },
       "messages": {
-        "line": "Style: {n} points over {max} words last reply — fragments, ≤{max} words per point."
+        "line": "Style: {n} points over {max} words last reply — fragments, ≤{max} words per point.",
+        "escalate": "Style flagged again: every point ≤{max} words — rewrite long points as two points or cut them"
       }
     },
     "scope-quote": {
@@ -277,6 +298,10 @@
           },
           {
             "source": "\\b(?:just|only)\\s+(?:the\\s+)?(?:\\(?[a-z0-9]{1,2}\\)?(?:\\s*,\\s*|\\s+and\\s+|\\s*&\\s*))+\\(?[a-z0-9]{1,2}\\)?\\b",
+            "flags": "i"
+          },
+          {
+            "source": "\\b(?:just|only)\\s+(?:\\(?[a-z]\\)?\\s+){1,5}(?:and\\s+)?\\(?[a-z]\\)?(?!\\w)",
             "flags": "i"
           },
           {
@@ -322,6 +347,18 @@
           {
             "source": "\\b(?:just|only|and|plus|also|as well as)\\s+(?:the\\s+)?[\\w-]+\\s+(?:ones?|versions?|variants?|types?|kinds?|models?)\\b",
             "flags": "i"
+          },
+          {
+            "source": "\\bI (?:no longer|don'?t|do not|can'?t|cannot|won'?t|can|could) (?:still |also )?(?:have|own|use|access|run|prompt|get into)\\b[^.?!,;\\n]{0,30}",
+            "flags": "i"
+          },
+          {
+            "source": "\\bwithout (?:the|a|an|my|any)\\s+[\\w-]+(?:\\s+[\\w-]+){0,2}",
+            "flags": "i"
+          },
+          {
+            "source": "^\\s*(?:and|also|plus|must be|must have|needs? to be|has to be)\\s+(?!(?:why|what|how|when|where|who|which|is|are|do|does|did|can|could|so|then|now)\\b)[\\w-]+(?:\\s+[\\w-]+){0,3}\\s*[.!]?\\s*$",
+            "flags": "i"
           }
         ]
       },
@@ -329,7 +366,7 @@
         "maxWords": 30
       },
       "messages": {
-        "context": "Scope: J said {phrases}. Honour it in every part of the answer."
+        "context": "Scope: J said {phrases} this chat. Honour each in every part of the answer; name any not met."
       }
     },
     "ask-first": {
@@ -344,6 +381,27 @@
       },
       "messages": {
         "line": "ask-first: ask to J held behind {n} calls — send asks the round they are known"
+      }
+    },
+    "question-edit": {
+      "patterns": {
+        "request": {
+          "source": "^(?:(?:can|could|would|will) you\\b|(?:fix|change|update|edit|rewrite|redraft|re-?phrase|shorten|cut|trim|add|remove|delete|make|draft|replace|amend|put|move|rename|do|go|run|build|create|write|apply|use|turn|fill|give|list|show|tell|explain|summari[sz]e|send|set|track|keep|check|find|search|compare)\\b)|\\b(?:please|pls|plz)\\b",
+          "flags": "i"
+        },
+        "redraft": {
+          "source": "^[\\s>*_#-]*(?:\\*\\*|__)?(?:(?:paste-?ready|replacement|redraft(?:ed)?)\\b[^\\n]{0,40}?|(?:revised|updated|suggested|new|proposed|amended|rewritten)\\s+(?:[\\w-]+\\s+){0,3}?(?:text|wording|clause|heading|header|para(?:graph)?|row|version|line|cell|sentence|draft|definition|language)\\b[^\\n]{0,20}?)(?:\\*\\*|__)?\\s*[:—–]",
+          "flags": "im"
+        }
+      },
+      "messages": {
+        "line": "question-edit: J asked a question — answer it; redraft or edit only when he asks."
+      }
+    },
+    "reuse-first": {
+      "messages": {
+        "create": "reuse-first: new artifact, no artifact list this chat — if memory or the list holds one on this subject, extend that (one master).",
+        "ask": "reuse-first: asked J before any lookup this turn — check memory, this chat and own tools first; ask only what they can't answer."
       }
     },
     "ask-standout": {
@@ -394,7 +452,10 @@
         "context": "Late-night message (tier: {line}). End the reply with one short (≤8 words), freshly worded sleep line fitting this tier; never repeat the last one's wording; never refuse, rush or lecture.",
         "tier1": "wind-down 22–23, bed at 23:00",
         "tier2": "past bedtime 23–04",
-        "tier3": "early hours 04–08, may not have slept"
+        "tier3": "early hours 04–08, may not have slept",
+        "log": "Log this message time: ArtifactData update on https://claude.ai/artifact/1pV8oEewdbsBMqi6EYDAA8, collection sleep, doc_id {date}, field {field} = {time} — read the doc first; only {rule}.",
+        "logEvening": "move last_evening later",
+        "logMorning": "move first_morning earlier"
       }
     },
     "foreground-wait": {
@@ -441,7 +502,7 @@
     "source-addendum": {
       "patterns": {
         "ids": {
-          "source": "^(legal-cite-source)$",
+          "source": "^$",
           "flags": ""
         }
       },
@@ -480,6 +541,17 @@
         "line": "J wrote mid-turn — answer via SendUserMessage now; hand the rest to a background agent"
       }
     },
+    "done-claim": {
+      "patterns": {
+        "claim": {
+          "source": "(?<!\\bun)(?<!\\bnot )(?<!n't )(?<!\\bnot yet )\\b(?:done|fixed|live|shipped|published|verified)\\b",
+          "flags": "i"
+        }
+      },
+      "messages": {
+        "line": "Claimed done without reading it back — verify and correct if needed."
+      }
+    },
     "first-reply": {
       "messages": {
         "line": "J-facing first: answer or 'on it, ETA' via SendUserMessage before work it doesn't need"
@@ -514,9 +586,36 @@
       },
       "message": "J is correcting you or probing a fix: include a Prevention: line fixing the cause (incl. why J, not Claude, spotted it) and settling J's likely follow-up (covers every case? why was J needed?).",
       "requires": {
-        "source": "^\\W*\\**Prevention:",
+        "source": "^\\W*Prevention(?:\\s*\\([^)\\n]{0,60}\\))?\\s*\\**\\s*:",
         "flags": "mi"
       }
+    },
+    {
+      "id": "range-walk",
+      "on": "prompt",
+      "pattern": {
+        "source": "^(?=\\W*(?:\\S+\\s+){0,11}\\S+\\W*$)\\W*(?:(?:and|ok|okay|so|now|then|also)\\W+)?(?:(?:what|how)\\s+about\\s+|and\\s+)(?:the\\s+)?(?:[A-Za-z][\\w-]*\\s+){0,2}?\\d+\\s*(?:-|–|—|to)\\s*\\d+\\b",
+        "flags": "i"
+      },
+      "message": "range-walk: J keeps asking for the next slice because each reply stopped short. This reply must make the list complete: every item from the first one not yet given individually"
+    },
+    {
+      "id": "range-walk-2",
+      "on": "prompt",
+      "pattern": {
+        "source": "^(?=\\W*(?:\\S+\\s+){0,11}\\S+\\W*$)\\W*(?:(?:and|ok|okay|so|now|then|also)\\W+)?(?:(?:what|how)\\s+about\\s+|and\\s+)(?:the\\s+)?(?:[A-Za-z][\\w-]*\\s+){0,2}?\\d+\\s*(?:-|–|—|to)\\s*\\d+\\b",
+        "flags": "i"
+      },
+      "message": "(including any you banded) through item 100, each on its own line as number, bold name, one-line description. No bands, no summaries, no 'list ends here'. Padding objections are overruled."
+    },
+    {
+      "id": "paste-ready",
+      "on": "answer",
+      "pattern": {
+        "source": "^(?![\\s\\S]*(?:\\x60\\x60\\x60|(?:^|\\n)[ \\t]*>|“[^”\\n]{30,}”|\"[^\"\\n]{30,}\"))[\\s\\S]*?(?:\\byours to (?:tell|send|pass on|forward|post|relay)\\b|\\bto paste (?:in|into)\\b|\\bpaste (?:it |this |that |them )?in(?:to)? (?:the |your |chat )|\\b(?:tell|send|forward|relay)\\s+(?:this\\s+|it\\s+)?(?:to\\s+)?chat [A-Z]\\b)",
+        "flags": "i"
+      },
+      "message": "paste-ready: the reply tells J to pass something on but gives no text to pass — add the exact message in a fenced block or > quote."
     }
   ]
 }
