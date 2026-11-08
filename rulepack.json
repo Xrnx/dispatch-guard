@@ -1,5 +1,5 @@
 {
-  "version": 14,
+  "version": 15,
   "checks": {
     "running-proof": {
       "patterns": {
@@ -112,7 +112,7 @@
     "promise-proof": {
       "patterns": {
         "promise": {
-          "source": "^[\\s>*_-]*(\\*\\*)?(Efficiency|Prevention):(\\*\\*)?\\s*(?!(\\*\\*)?none\\b)[^\\s*]|\\b(from now on|going forward|in future|next time|I'?ll (remember|make sure|always|never))\\b",
+          "source": "^[\\s>*_-]*(\\*\\*)?(Efficiency|Prevention):(\\*\\*)?\\s*(?!(\\*\\*)?none\\b|(?:\\*\\*)?I(?:'ve)? (?:[a-z]+ed|cut|left|didn'?t|did not|should have)\\b)[^\\s*]|\\b(from now on|going forward|in future|next time|I'?ll (remember|make sure|always|never))\\b",
           "flags": "im"
         }
       },
@@ -186,7 +186,7 @@
     "checked-line": {
       "patterns": {
         "ask": {
-          "source": "\\b(best|recommend|which|options?|alternatives?|should i|what about|anything else|compare|vs\\.?)\\b",
+          "source": "(?<![-\\w])(?:best|recommend|(?:^|[.?!:;(]\\s*|\\b(?:and|or|but|so|know|tell me|decide|pick|choose|say|sure|ask|about|for|is|are|do|does|should|would|could|can)\\s+)which|options?|alternatives?|should i|what about(?! (?:stage |step |item |top )?\\d)|anything else(?! in\\b)|compare|vs\\.?)\\b",
           "flags": "i"
         },
         "checked": {
@@ -267,7 +267,7 @@
     "reask-guard": {
       "patterns": {
         "reask": {
-          "source": "\\b(verified where|where is (this|that|it)\\b|why (did|do) you (say|think|use|put)|are you sure|is it really|no,? it'?s a question|i (just|already) (told|said)|repeat(ing)? myself|you (forgot|missed|ignored)|not what i (asked|said|meant)|what is (para|paragraph|cl|clause|s|section|sch|schedule)\\b|that'?s (wrong|not right))|\\b(what|which|where)(?:'?s|\\s+is|\\s+are)?\\s+(?:the\\s+)?[A-Za-z]{1,10}\\.?\\s?\\d[\\w.]*",
+          "source": "\\b(verified where|where is (this|that|it)\\b|why (did|do) you (say|think|use|put)|are you sure|is it really|no,? it'?s a question|i (just|already) (told|said)|repeat(ing)? myself|you (forgot|missed|ignored)|not what i (asked|said|meant)|what is (para|paragraph|cl|clause|s|section|sch|schedule)\\b|that'?s (wrong|not right))|\\b(what|which|where)(?:'?s|\\s+is|\\s+are)?\\s+(?:the\\s+)?(?!about\\b)[A-Za-z]{1,10}\\.?\\s?\\d[\\w.]*",
           "flags": "i"
         },
         "ok": {
@@ -407,7 +407,7 @@
     "ask-standout": {
       "patterns": {
         "ask": {
-          "source": "\\b(you|your)\\b[^?]*\\?",
+          "source": "^(?!\\W*Next\\b)[\\s\\S]*?\\b(you|your)\\b[^?]*\\?",
           "flags": "i"
         }
       },
@@ -487,7 +487,7 @@
     "leap-line": {
       "patterns": {
         "leap": {
-          "source": "^[\\s>*_-]*(?:\\*\\*|__)?Leap\\s*:",
+          "source": "(?:^[\\s>*_-]*|[.!?]\\s+\\*{0,2})(?:\\*\\*|__)?Leap\\s*:",
           "flags": "im"
         }
       },
@@ -572,7 +572,7 @@
       "id": "held-for-j",
       "on": "answer",
       "pattern": {
-        "source": "^(?![^\\n]*^\\W*Action\\b)[^\\n]*\\b(?:once|after|when|until|as soon as)\\s+(?:you(?:['’]ve| have|['’]ll| will)?|your)\\s+(?:(?:save|saved|saving|upload|uploaded|reply|replied|respond|responded|confirm|confirmed|approve|approved|paste|pasted|send|sent|answer|answered|install|installed|share|shared|review|reviewed|sign|signed)\\b|(?:have |has )?(?:saved|uploaded|replied|confirmed|approved|pasted|sent|answered|reviewed|signed)\\b)",
+        "source": "^(?![^\\n]*^\\W*Action\\b)(?!(?=[^\\n]*\\(needs you\\))(?![^\\n]*\\b(?:save|saved|saving)\\b))[^\\n]*\\b(?:once|after|when|until|as soon as)\\s+(?:you(?:['’]ve| have|['’]ll| will)?|your)\\s+(?:(?:save|saved|saving|upload|uploaded|reply|replied|respond|responded|confirm|confirmed|approve|approved|paste|pasted|send|sent|answer|answered|install|installed|share|shared|review|reviewed|sign|signed)\\b|(?:have |has )?(?:saved|uploaded|replied|confirmed|approved|pasted|sent|answered|reviewed|signed)\\b)",
         "flags": "mi"
       },
       "message": "Held something behind a J step — send everything ready now (several calls if a tool caps per call)."
