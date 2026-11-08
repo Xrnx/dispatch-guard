@@ -1,0 +1,115 @@
+{
+  "note": "Eval cases for the prompt-type Stop hook in hooks/hooks.json. Prompt hooks cannot run in unit tests (claude plugin test): run these in a replay/eval run (feed `input` as the hook input, compare the returned ok).",
+  "cases": [
+    {
+      "id": "S1-recommendations-not-built",
+      "input": {
+        "stop_hook_active": false,
+        "background_tasks": [],
+        "last_assistant_message": "Port recommendations:\n- Weekday check: cheap, worth adding.\n- Coverage rule: should be a rule-pack add.\n- Writes check: needs a hook.\n\nNext: build them."
+      },
+      "expected": {
+        "ok": false
+      },
+      "why": "Describes next steps it could do itself instead of doing them."
+    },
+    {
+      "id": "S2-background-agents-running",
+      "input": {
+        "stop_hook_active": false,
+        "background_tasks": [
+          {
+            "id": "a1"
+          },
+          {
+            "id": "ag2"
+          },
+          {
+            "id": "a3"
+          }
+        ],
+        "last_assistant_message": "Three background agents are running: build (ETA 12 min), tests (ETA 5 min), zip (ETA 2 min). I will report when they finish."
+      },
+      "expected": {
+        "ok": true
+      },
+      "why": "Work already launched; the old prompt re-prompted here."
+    },
+    {
+      "id": "S3-irreversible-decision",
+      "input": {
+        "stop_hook_active": false,
+        "background_tasks": [],
+        "last_assistant_message": "Ready to push the release branch to the public repo. This cannot be undone once pulled by others. Push now or hold? (needs you)"
+      },
+      "expected": {
+        "ok": true
+      },
+      "why": "Irreversible action needing only the user's decision."
+    },
+    {
+      "id": "S4-unevidenced-next-time",
+      "input": {
+        "stop_hook_active": false,
+        "background_tasks": [],
+        "last_assistant_message": "Fixed. This should catch the problem next time."
+      },
+      "expected": {
+        "ok": false
+      },
+      "why": "Claims future prevention with no evidence or change made; assistant could verify or make the change."
+    },
+    {
+      "id": "S5-reply-defers-to-nonempty-background-tasks",
+      "input": {
+        "stop_hook_active": false,
+        "background_tasks": [
+          {
+            "id": "b9"
+          }
+        ],
+        "last_assistant_message": "Waiting on the build agent; will relay its result when it finishes."
+      },
+      "expected": {
+        "ok": true
+      },
+      "why": "Non-empty background_tasks and the reply defers to them."
+    },
+    {
+      "id": "S6-stop-hook-active",
+      "input": {
+        "stop_hook_active": true,
+        "background_tasks": [],
+        "last_assistant_message": "Want me to do X?"
+      },
+      "expected": {
+        "ok": true
+      },
+      "why": "stop_hook_active short-circuit is unchanged."
+    },
+    {
+      "id": "S-prev-task-local-only",
+      "input": {
+        "stop_hook_active": false,
+        "background_tasks": [],
+        "last_assistant_message": "Correction: I used the wrong date in the memo.\nPrevention: I added a line to this task's plan file (/work/plan.md) to re-check dates before sending."
+      },
+      "expected": {
+        "ok": false
+      },
+      "why": "Prevention saved for this task only: not Claude-wide, no check that fires every time, no why-J-caught-it line."
+    },
+    {
+      "id": "S-prev-complete",
+      "input": {
+        "stop_hook_active": false,
+        "background_tasks": [],
+        "last_assistant_message": "Correction: I used the wrong date in the memo.\nPrevention: added a date-vs-weekday check to the dispatch-guard hook (hooks/register.ts, test passes) and a one-line rule in /preferences.md, so it fires on every reply in every task.\nWhy you caught it: no check compared weekday to date; the new hook does it on every reply."
+      },
+      "expected": {
+        "ok": true
+      },
+      "why": "Why-J line, Claude-wide save and a code check that fires every time."
+    }
+  ]
+}

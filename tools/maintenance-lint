@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Maintenance lint (report only; never edits memory, never part of a per-turn hook, so no recurring token cost).
+#   1. Pointer integrity: every memory path / [[name]] / #anchor / artifact URL / plugin-relative path / card-heading pointer
+#      found in exported memory files and in the cards resolves; no line-number pointers.
+#   2. Duplicate rules: clauses in /preferences.md and the orchestrator card that restate a check the hooks already enforce
+#      (match by check id, message wording and curated keywords) -> suggest deleting the prose clause. Checks switched off
+#      (OFF) or dark (DARK) in hooks/register.ts are not enforced, so they are listed as "keep".
+# Memory lives behind the memory tools, not on disk: export it first (memory_list + memory_read -> files under DIR, same relative
+# paths, e.g. DIR/preferences.md, DIR/areas/open-items.md) and pass --memory-dir DIR.
+# Usage: tools/maintenance-lint [--memory-dir DIR] [--memory-index FILE] [--artifacts FILE] [--list-urls] [--plugin-root DIR]
+#   --memory-index FILE  extra existing memory paths, one per line (files not exported, e.g. project copies)
+#   --artifacts FILE     tab-separated "<artifact url><TAB>ok|missing" from Artifact read (existence only); URLs absent = "unchecked"
+#   --list-urls          print the artifact URLs found in the memory dir, one per line, then exit (for the Artifact-read pass)
+# The final line is "RESULT: OK" or "RESULT: FAILED (<n> issues)"; only pointer problems count as issues (duplicate-rule
+# suggestions are advice). Exit 0 / 1. Needs node >= 22.6 (type stripping, same as rulepack-publish.sh).
+set -uo pipefail
+here="$(cd "$(dirname "$0")/.." && pwd)"
+exec node --experimental-strip-types --no-warnings "$here/tools/maintenance-lint.mjs" --plugin-root "$here" "$@"

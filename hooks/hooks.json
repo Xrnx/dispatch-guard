@@ -1,1 +1,18 @@
-{ "modules": ["./register.ts"] }
+{
+ "modules": [
+  "./register.ts"
+ ],
+ "hooks": {
+  "Stop": [
+   {
+    "hooks": [
+     {
+      "type": "prompt",
+      "timeout": 30,
+      "prompt": "Input: $ARGUMENTS. You review an AI assistant's final reply to its user (J). Read last_assistant_message. If stop_hook_active is true, return {\"ok\":true}. Return {\"ok\":false,\"reason\":\"<exact action(s) the assistant must do now, before ending>\"} only if the reply leaves work the assistant could do itself without the user: an open or unresolved question it could check; a claim it says is unchecked, unverified or uncertain but could look up; a fix, improvement, open item or next step it describes, suggests or offers instead of doing; an offer like 'want me to' or 'I can'; a prevention claim (e.g. 'should catch this next time') with no test, check or change shown this turn. Do NOT flag: questions that need only the user's decision or an irreversible action; work already reported as launched/running; items explicitly blocked on the user. Return {\"ok\":true} when the reply states that work is running, pending or launched in background agents or tasks (e.g. \"three agents are running, ETA …\") or when the input's background_tasks is non-empty and the reply defers to them (waiting for them, will report when they finish): that is work already running, not left undone. Still flag a described-but-unstarted fix or an offer. If the reply contains a Correction or Prevention, ask the follow-ups J would ask next: does it say why J, not Claude, caught it; is the fix saved Claude-wide rather than for this task only; is it a check that fires every time rather than a rule to remember; does it cover similar cases; would J need to ask 'does this need a prevention too?'. If any answer is no and Claude could fix it now, return {\"ok\":false,\"reason\":\"<that exact follow-up as the action>\"}. Otherwise return {\"ok\":true}."
+     }
+    ]
+   }
+  ]
+ }
+}

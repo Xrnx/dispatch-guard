@@ -1,1 +1,10 @@
-{ "name": "dispatch-guard", "version": "0.4.0", "description": "Loads the orchestrator skill at the start of every chat and reminds the dispatcher to hand off work after 3 tool calls in a turn.", "author": { "name": "Xrnx" }, "types": "./types/index.d.ts" }
+{
+  "name": "dispatch-guard",
+  "version": "0.6.16",
+  "description": "Loads the orchestrator card at the start of every chat and flags misses in each turn's replies (checked line, landed fixes, asks first, legal sources, labels, scope, question edits, corrections). Deep mode (default): check_reply pre-send check with an AI judge before the reply goes out; `light mode` turns it off.",
+  "author": {
+    "name": "Xrnx"
+  },
+  "types": "./types/index.d.ts",
+  "license": "MIT"
+}
