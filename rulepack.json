@@ -1,5 +1,5 @@
 {
-  "version": 12,
+  "version": 13,
   "checks": {
     "running-proof": {
       "patterns": {
@@ -589,24 +589,6 @@
         "source": "^\\W*Prevention(?:\\s*\\([^)\\n]{0,60}\\))?\\s*\\**\\s*:",
         "flags": "mi"
       }
-    },
-    {
-      "id": "range-walk",
-      "on": "prompt",
-      "pattern": {
-        "source": "^(?=\\W*(?:\\S+\\s+){0,11}\\S+\\W*$)\\W*(?:(?:and|ok|okay|so|now|then|also)\\W+)?(?:(?:what|how)\\s+about\\s+|and\\s+)(?:the\\s+)?(?:[A-Za-z][\\w-]*\\s+){0,2}?\\d+\\s*(?:-|–|—|to)\\s*\\d+\\b",
-        "flags": "i"
-      },
-      "message": "range-walk: J keeps asking for the next slice because each reply stopped short. This reply must make the list complete: every item from the first one not yet given individually"
-    },
-    {
-      "id": "range-walk-2",
-      "on": "prompt",
-      "pattern": {
-        "source": "^(?=\\W*(?:\\S+\\s+){0,11}\\S+\\W*$)\\W*(?:(?:and|ok|okay|so|now|then|also)\\W+)?(?:(?:what|how)\\s+about\\s+|and\\s+)(?:the\\s+)?(?:[A-Za-z][\\w-]*\\s+){0,2}?\\d+\\s*(?:-|–|—|to)\\s*\\d+\\b",
-        "flags": "i"
-      },
-      "message": "(including any you banded) through item 100, each on its own line as number, bold name, one-line description. No bands, no summaries, no 'list ends here'. Padding objections are overruled."
     },
     {
       "id": "paste-ready",
