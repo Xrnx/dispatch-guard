@@ -1,5 +1,5 @@
 {
-  "version": 13,
+  "version": 14,
   "checks": {
     "running-proof": {
       "patterns": {
@@ -563,7 +563,7 @@
       "id": "legal-cite-source",
       "on": "answer",
       "pattern": {
-        "source": "^(?![^\\n]*(?:https?://|\\(inferred\\)|\\bunverified\\b|[\"“”][^\"“”\\n]{8,}[\"“”]))[^\\n]*(?:\\b(?:ss?|[Ss]ec|[Ss]ections?)\\.? ?\\d+[A-Z]?(?:\\([a-zA-Z0-9]+\\))+|\\bss?\\.? \\d+[A-Z]?\\b|\\b[Ss]ections? \\d+[A-Z]?\\b(?= of\\b|,|;|\\.|\\)| and\\b| applies| requires| provides)|\\b[A-Z][A-Za-z]+(?: (?:and |of |the )?[A-Z][A-Za-z]+)* Act\\b|\\b(?:Rule|Reg|Regs|Regulation|Regulations|Article|Art)\\.? \\d+|\\[\\d{4}\\] (?:\\d+ )?[A-Z][A-Za-z]*(?: [A-Za-z]+)? \\d+)",
+        "source": "^(?![^\\n]*(?:https?://|\\(inferred\\)|\\bunverified\\b|[\"“”][^\"“”\\n]{8,}[\"“”]))[^\\n]*(?:(?<![’'])\\b(?:ss?|[Ss]ec|[Ss]ections?)\\.? ?\\d+[A-Z]?(?:\\([a-zA-Z0-9]+\\))+|(?<![’'])\\bss?\\.? \\d+[A-Z]?\\b|\\b[Ss]ections? \\d+[A-Z]?\\b(?= of\\b|,|;|\\.|\\)| and\\b| applies| requires| provides)|\\b[A-Z][A-Za-z]+(?: (?:and |of |the )?[A-Z][A-Za-z]+)* Act\\b|\\b(?:Rule|Reg|Regs|Regulation|Regulations|Article|Art)\\.? \\d+|\\[\\d{4}\\] (?:\\d+ )?[A-Z][A-Za-z]*(?: [A-Za-z]+)? \\d+)",
         "flags": "m"
       },
       "message": "legal citation without a source on the same line — add the source link/quote or tag (inferred)"
