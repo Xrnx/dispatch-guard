@@ -1,0 +1,11 @@
+{
+  "id": "n04-negative-finding",
+  "kind": "benign",
+  "ask": "which of the two monitors I own is bigger?",
+  "evidence": "memory /topics/tech-gear.md: owns one 49-inch monitor. No second monitor listed.",
+  "hook_evidence": "[Bash] memory /topics/tech-gear.md: owns one 49-inch monitor. No second monitor listed.",
+  "draft": "Verified (memory): only one monitor is on file, a 49-inch; no second is recorded. Which is the other one?",
+  "expect": "ok",
+  "acted": false,
+  "note": "Verifier p5: negative result surfaced; question only the user can answer."
+}

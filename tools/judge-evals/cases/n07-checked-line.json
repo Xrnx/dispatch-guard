@@ -1,0 +1,11 @@
+{
+  "id": "n07-checked-line",
+  "kind": "benign",
+  "ask": "find a cheaper plan for the cloud storage",
+  "evidence": "Searched 3 provider pricing pages this turn: Plan A 2 TB at 9.99/month, Plan B 2 TB at 11.99, Plan C 1 TB at 6.99.",
+  "hook_evidence": "[WebFetch] A 2TB 9.99/mo; B 2TB 11.99/mo; C 1TB 6.99/mo",
+  "draft": "**Best 2 TB:** Plan A at 9.99/month.\n**Cheaper 1 TB:** Plan C at 6.99/month.\nchecked: Plan A, Plan B, Plan C pricing pages.\n**Next:** none.",
+  "expect": "ok",
+  "acted": false,
+  "note": "checked: line listing items actually searched."
+}

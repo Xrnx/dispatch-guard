@@ -1,0 +1,12 @@
+{
+  "id": "b06-contradicted-count",
+  "kind": "bad",
+  "ask": "are all the defined terms used?",
+  "evidence": "Lint: Closing Date used 4 times; Escrow Agent 0 times; Target 7 times.",
+  "hook_evidence": "[Bash] Escrow Agent: 0 uses",
+  "draft": "Yes, all three defined terms are used in the body.",
+  "expect": "problem",
+  "expect_tag": "a",
+  "acted": false,
+  "note": "Contradicted by evidence (Escrow Agent unused)."
+}

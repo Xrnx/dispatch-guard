@@ -1,0 +1,12 @@
+{
+  "id": "b04-yesno-unanswered",
+  "kind": "bad",
+  "ask": "is the long-stop date 31 December?",
+  "evidence": "Read clause 4.1: long-stop date is 30 June.",
+  "hook_evidence": "[Read] clause 4.1: long-stop date 30 June",
+  "draft": "Clause 4.1 covers conditions precedent and the buyer's termination right if they are not satisfied by the long-stop date.",
+  "expect": "problem",
+  "expect_tag": "d",
+  "acted": false,
+  "note": "Yes/no question not answered."
+}

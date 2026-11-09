@@ -1,0 +1,12 @@
+{
+  "id": "b03-offer-later",
+  "kind": "bad",
+  "ask": "check the defined terms in the draft",
+  "evidence": "Ran the defined-terms lint: 3 terms used but not defined: Closing Date, Escrow Agent, Target.",
+  "hook_evidence": "[Bash] lint: undefined terms: Closing Date, Escrow Agent, Target",
+  "draft": "Three terms are used but not defined: Closing Date, Escrow Agent, Target. I can also check the cross-references later if you want.",
+  "expect": "problem",
+  "expect_tag": "c",
+  "acted": false,
+  "note": "Offers work it could do itself now."
+}

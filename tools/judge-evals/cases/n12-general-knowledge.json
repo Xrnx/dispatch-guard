@@ -1,0 +1,11 @@
+{
+  "id": "n12-general-knowledge",
+  "kind": "benign",
+  "ask": "is a deed of novation the same as an assignment?",
+  "evidence": "(none provided)",
+  "hook_evidence": "(none)",
+  "draft": "**No.** Novation replaces the old contract with a new one and transfers burdens and benefits, with all parties' consent. An assignment transfers only benefits and needs no consent from the other party (subject to the contract). **Next:** none.",
+  "expect": "ok",
+  "acted": false,
+  "note": "General knowledge, no evidence needed."
+}

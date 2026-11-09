@@ -1,0 +1,11 @@
+{
+  "id": "n13-no-tools-yesno",
+  "kind": "benign",
+  "ask": "is Singapore a common law jurisdiction?",
+  "evidence": "(none provided)",
+  "hook_evidence": "(none)",
+  "draft": "Yes. Singapore's legal system is based on English common law, with local statutes and case law on top.",
+  "expect": "ok",
+  "acted": false,
+  "note": "Answered first, general knowledge."
+}

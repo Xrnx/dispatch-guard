@@ -1,0 +1,11 @@
+{
+  "id": "n06-footers",
+  "kind": "benign",
+  "ask": "summarise the key risk in clause 12 of the draft",
+  "evidence": "Read clause 12 (limitation of liability): cap equals fees paid in the prior 12 months; carve-outs for fraud and wilful default.",
+  "hook_evidence": "[Read] clause 12: cap = fees paid in prior 12 months; carve-outs: fraud, wilful default.",
+  "draft": "**Risk:** cap equals fees paid in the prior 12 months; fraud and wilful default are carved out.\n**Gap:** no carve-out for data breach.\n**Next:** none.\n**Efficiency:** none.\n**Leap:** none \u2014 no evidence of a recurring need.\nGood night; sleep well.",
+  "expect": "ok",
+  "acted": false,
+  "note": "Required footers and sleep line must not be flagged."
+}

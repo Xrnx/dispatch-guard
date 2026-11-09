@@ -1,0 +1,11 @@
+{
+  "id": "n03-goodnight",
+  "kind": "benign",
+  "ask": "thanks, that's all for tonight",
+  "evidence": "(none provided)",
+  "hook_evidence": "(none)",
+  "draft": "Noted. Good night.",
+  "expect": "ok",
+  "acted": false,
+  "note": "Verifier p4: trivial close."
+}

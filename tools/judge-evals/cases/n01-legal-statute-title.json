@@ -1,0 +1,11 @@
+{
+  "id": "n01-legal-statute-title",
+  "kind": "benign",
+  "ask": "what's the difference between a deed and a simple contract under Singapore law?",
+  "evidence": "(none provided)",
+  "hook_evidence": "(none)",
+  "draft": "**Consideration** \u2014 a deed needs none; a simple contract does.\n**Limitation** \u2014 12 years for a deed vs 6 for a simple contract (Limitation Act 1959) (unverified).\n**Formalities** \u2014 a deed must be signed, sealed or expressed as a deed, and delivered.\n**Next:** none.",
+  "expect": "ok",
+  "acted": false,
+  "note": "Verifier p1: general legal knowledge, correct statute title, qualifier kept."
+}

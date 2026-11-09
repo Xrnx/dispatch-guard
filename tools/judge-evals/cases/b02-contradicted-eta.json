@@ -1,0 +1,12 @@
+{
+  "id": "b02-contradicted-eta",
+  "kind": "bad",
+  "ask": "when will the review be ready?",
+  "evidence": "Review agent launched at 14:05 SGT; harness ETA 16:30 SGT.",
+  "hook_evidence": "[Bash] launched 14:05 SGT, ETA 16:30 SGT",
+  "draft": "The review will be ready by 15:00 SGT.",
+  "expect": "problem",
+  "expect_tag": "a",
+  "acted": false,
+  "note": "ETA contradicts the evidence."
+}

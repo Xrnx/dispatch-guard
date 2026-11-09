@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { CARD } from './orchestrator-card'
-import { validatePack, bundledPackJson, BUNDLED_VERSION, mergePack } from './rulepack'
-import { modeCommand, deepProblems, missingEfficiency, deepMissingLeap, replyHash, CHECK_TOOL, MODE_KEY, DENY_LOG_KEY, CAUGHT_KEY, JUDGE_KEY, JUDGE_RULES, parseJudge, DEEP_LINE, DEEP_DARK, CHECK_SPEC, stubOutput, undefinedLabels, questionOnly, redrafts, missingLeap, uncomputed, numbersIn, nonPreventions, startsWork, answersFirst, scopePhrases, asksJ, buriedAsks, promises, parkedFix, foregroundWait, offers, RELAY_AT, longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, jText, reasks, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL, clockStamp, danglingRefs, isJ, knowableAsks, inputAsk, workMade, draftGap, missUnlanded, fixEvidence, settleRow, absoluteClaims, openQuestions } from './register'
+import { validatePack, bundledPackJson, BUNDLED_VERSION, mergePack, bundledRules } from './rulepack'
+import { MISSING_LINE, sessionBlock, SESSION_INDEX_KEY, KEEP_SESSIONS, problemLabel, SET_RULES_TOOL, RULES_KEY, deepLine, setRules, cleanProblem, deepRow, tokensOf, JUDGE_TOKENS_KEY, judgeRules, skipJudge, denyCap, modeCommand, deepProblems, missingEfficiency, deepMissingLeap, replyHash, CHECK_TOOL, MODE_KEY, DENY_LOG_KEY, CAUGHT_KEY, JUDGE_KEY, JUDGE_RULES, parseJudge, DEEP_LINE, DEEP_DARK, CHECK_SPEC, stubOutput, undefinedLabels, questionOnly, redrafts, missingLeap, uncomputed, numbersIn, nonPreventions, startsWork, answersFirst, scopePhrases, asksJ, buriedAsks, promises, parkedFix, foregroundWait, offers, RELAY_AT, longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, jText, reasks, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL, clockStamp, danglingRefs, isJ, knowableAsks, inputAsk, workMade, draftGap, missUnlanded, fixEvidence, settleRow, absoluteClaims, openQuestions, PLUGIN_VERSION, sourceGate } from './register'
 
 const TURN = /4th tool call this turn/
 const BASH = /Foreground Bash builds\/tests\/installs\/clones\/waits/
@@ -1979,19 +1979,24 @@ test('0.6.15 prevention-line why: Prevention/Correction without "Why you caught 
 const BAD = 'Only teeth is high-ROI here.' // absolute claim, no lookup tool this turn
 // engine() with an in-memory store the test can read back (mock.store has no read handle).
 const JUDGE_OK = { isAnswered: true, text: '{"ok":true,"problems":[]}', usage: {} }
-const deepEngine = (on: any) => {
+// 0.6.17: bundled defaults are cap 1 and a 60-word judge floor; most deep tests predate that and run under a pack restoring cap 2 / no floor (legacy = true). New-default tests pass false.
+const LEGACY_PACK = JSON.stringify({ version: BUNDLED_VERSION + 1, checks: { 'deep-cap': { numbers: { cap: 2 } }, 'deep-judge': { numbers: { minWords: 0 } }, 'deep-evidence': { numbers: { sourceGate: 0 } } } }) // gate off: older tests predate the source gate
+const deepEngine = (on: any, legacy: boolean | object = true) => {
   const judge: { calls: any[]; reply: any } = { calls: [], reply: JUDGE_OK }
   const mem: Record<string, unknown> = {}
   const seen: string[] = []
   on('store.get', (_$: any, e: any) => ({ value: mem[e.key] }))
   on('store.set', (_$: any, e: any) => { mem[e.key] = e.value; return { value: undefined } })
-  noPack(on)
+  const packText = legacy === true ? LEGACY_PACK : typeof legacy === 'object' ? JSON.stringify(legacy) : undefined
+  setRules(packText === undefined ? bundledRules() : mergePack(JSON.parse(packText)))
+  if (packText !== undefined) on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: packText } })); else noPack(on)
   on('model.complete', (_$: any, e: any) => { judge.calls.push(e); const r = judge.reply; return { value: typeof r === 'function' ? r(e) : r } })
-  on('session.id', () => ({ value: 'session-D' }))
+  const sidBox = { v: 'session-D' }
+  on('session.id', () => ({ value: sidBox.v }))
   on('turn.start', (_$: any, e: any) => ({ turnId: e.turnId }))
-  on('tool.call', () => ({ result: {}, text: '' }))
+  on('tool.call', () => ({ result: {}, text: (judge as any).toolText ?? '' }))
   on('prompt.submit', (_$: any, e: any) => { seen.push((e.context ?? []).join('\n')); return { text: e.text, context: e.context } })
-  return { mem, seen, judge }
+  return { mem, seen, judge, sidBox }
 }
 const CLEAN = 'Noted. Two options left.'
 const send = (m: string) => ({ tool: 'SendUserMessage', message: m } as any)
@@ -2057,7 +2062,7 @@ test('deep: leap and efficiency lines are required on a substantive reply, not a
   expect(missingEfficiency(LONG)).toBe(true)
   expect(missingEfficiency(`${LONG}\n**Efficiency:** none\n**Leap:** none`)).toBe(false)
   const ok = await $.tool.call(send(`${LONG}\n**Efficiency:** none\n**Leap:** none`)) as any
-  expect(ok.deny).toBeUndefined()
+  expect(ok.deny).toMatch(/Efficiency: none after 1 failed check round/) // 0.6.17: not accepted after a failed round
   expect(((await $.tool.call(send('On it, ETA 2 min.'))) as any).deny).toBeUndefined()
   expect(deepProblems(LONG, { asked: 'x', corpus: '', looked: true, anyTool: true, jTurn: false, acted: true }).map(p => p.id)).not.toContain('leap-line')
 })
@@ -2197,10 +2202,8 @@ test('judge: failing verdict fails check_reply with the judge problems; cap of 2
   expect(f.result).toMatch(/1\/2/)
   expect(((await $.tool.call(chk(CLEAN))) as any).result).toMatch(/2\/2/)
   const third = await $.tool.call(chk(CLEAN)) as any
-  expect(third.result).toMatch(/^PASS \S+ \(note: 2 failed checks this prompt, judge skipped at the cap\)/)
-  expect(judge.calls.length).toBe(2) // at the cap the judge is skipped; the count stays at the cap until a new prompt
-  expect(((await $.tool.call(chk(CLEAN))) as any).result).toMatch(/judge skipped/)
-  expect(judge.calls.length).toBe(2)
+  expect(third.result).toMatch(/^PASS \S+ \(note: 2 failed checks, open problems: judge: "chain closed"/) // 0.6.17: the judge still runs at the cap; untagged problems pass with a note
+  expect(judge.calls.length).toBe(3)
   expect((mem[DENY_LOG_KEY] as any[])[0].checks).toContain('judge')
   expect(mem[CAUGHT_KEY]).toBe(1)
 })
@@ -2328,9 +2331,9 @@ test('final reply: a text matching a PASS from this turn is not logged; an unche
   const ok = await $.turn.complete(end('t1', `  ${CLEAN}  `)) as any
   expect(ok.text).toContain('Noted')
   expect((mem[DENY_LOG_KEY] as any[] | undefined ?? []).filter(r => r.final).length).toBe(0)
-  await $.prompt.submit({ text: 'again' } as any)
+  await $.prompt.submit({ text: 'is it fine?' } as any) // a yes/no ask is never 'short'
   await $.turn.start(turn('t2'))
-  const bad = await $.turn.complete(end('t2', 'A different final text.')) as any
+  const bad = await $.turn.complete(end('t2', "A different final text.")) as any
   expect(bad.text).toContain('A different final text.')
   expect((mem[DENY_LOG_KEY] as any[]).filter(r => r.final === 'unchecked').length).toBe(1)
 })
@@ -2361,12 +2364,12 @@ test('check_reply: at the cap the count stays at the cap for the rest of the pro
   await $.tool.call(chk(BADC)); await $.tool.call(chk(BADC))
   const calls = judge.calls.length
   for (let i = 0; i < 3; i++) expect(((await $.tool.call(chk(BADC))) as any).result).toMatch(/^PASS \S+ \(note: 2 failed checks, open problems: Correction/)
-  expect(judge.calls.length).toBe(calls)
+  expect(judge.calls.length).toBe(calls + 3) // 0.6.17: the judge still runs at the cap (BADC holds a Correction word)
   await $.turn.complete(end('t1', 'ok'))
   await $.prompt.submit({ text: 'second' } as any)
   await $.turn.start(turn('t2'))
   expect(((await $.tool.call(chk(BADC))) as any).result).toMatch(/1\/2/)
-  expect(judge.calls.length).toBe(calls + 1)
+  expect(judge.calls.length).toBe(calls + 4)
 })
 
 test('epoch: bumped on every J prompt (time + random string), so an old count never taxes a new prompt', async ($, on) => {
@@ -2508,7 +2511,7 @@ test('deep: with check_reply in the tool list the deep line is injected and noth
   on('tool.list', () => ({ value: [{ name: CHECK_TOOL, description: '', mcp: true }] }))
   await $.prompt.submit({ text: 'hello' } as any)
   expect(seen[0]).toMatch(/check_reply/)
-  expect(reg.length).toBe(0)
+  expect(reg.map(r => r.spec?.name ?? r.name)).toEqual(['set_rules']) // only set_rules is added; check_reply is not re-registered
 })
 test('deep: a lost check_reply registration is restored at the prompt (same name replaces); the deep line follows', async ($, on) => {
   const { seen } = deepEngine(on)
@@ -2516,7 +2519,665 @@ test('deep: a lost check_reply registration is restored at the prompt (same name
   on('tool.register', (_$: any, e: any) => { reg.push(e); return { value: undefined } })
   on('tool.list', () => ({ value: [{ name: 'Bash', description: '', mcp: false }] }))
   await $.prompt.submit({ text: 'hello' } as any)
-  expect(reg.length).toBe(1)
-  expect(reg[0].spec?.name ?? reg[0].name).toBe('check_reply')
+  expect(reg.map(r => r.spec?.name ?? r.name).sort()).toEqual(['check_reply', 'set_rules'])
   expect(seen[0]).toMatch(/Deep mode: draft/)
+})
+
+// 0.6.17 faster deep mode.
+const LONGW = Array.from({ length: 70 }, (_, i) => `word${i}`).join(' ')
+test('0.6.17 defaults: cap 1, judge floor 60 words, judge rules ≤250 words and generic', () => {
+  setRules(bundledRules())
+  expect(denyCap()).toBe(1)
+  expect(judgeRules()).toBe(JUDGE_RULES)
+  expect(JUDGE_RULES.split(/\s+/).length).toBeLessThanOrEqual(250)
+  expect(JUDGE_RULES).toMatch(/At most 3 problems/)
+  expect(JUDGE_RULES).toMatch(/Do NOT flag/)
+  expect(JUDGE_RULES).toMatch(/Efficiency\/Leap footers, a closing sleep line/)
+})
+test('0.6.17 cap 1: one failed check, then PASS with a note (no judge at the cap)', async ($, on) => {
+  const { judge } = deepEngine(on, false)
+  await $.turn.start(turn('t1'))
+  expect(((await $.tool.call(check(BADC))) as any).result).toMatch(/\(1\/1\)/)
+  const second = await $.tool.call(check(BADC)) as any
+  expect(second.result).toMatch(/^PASS \S+ \(note: 1 failed checks, open problems: /)
+  expect(judge.calls.length).toBe(2) // 0.6.17: the judge still runs at the cap
+})
+test('0.6.17 deep-cap is a pack value (0-3): cap 0 never fails a draft, 4 is invalid', async ($, on) => {
+  const pk = (cap: number) => ({ version: BUNDLED_VERSION + 1, checks: { 'deep-cap': { numbers: { cap } } } })
+  expect(validatePack(pk(3))).toEqual([])
+  expect(validatePack(pk(0))).toEqual([])
+  expect(validatePack(pk(4)).join()).toMatch(/deep-cap\.numbers\.cap/)
+  deepEngine(on, pk(0))
+  await $.turn.start(turn('t1'))
+  expect(((await $.tool.call(check(BADC))) as any).result).toMatch(/^PASS \S+ \(note: 0 failed checks/)
+})
+test('0.6.17 short replies skip the judge; long ones, and short ones with a done-claim or Correction word, do not', async ($, on) => {
+  setRules(bundledRules())
+  expect(skipJudge('Noted. Two options left.')).toBe(true)
+  expect(skipJudge('Fixed it.')).toBe(false)
+  expect(skipJudge('Correction: wrong date.')).toBe(false)
+  expect(skipJudge(LONGW)).toBe(false)
+  const { judge } = deepEngine(on, false)
+  await $.turn.start(turn('t1'))
+  await $.tool.call(chk('Noted. Two options left.'))
+  expect(judge.calls.length).toBe(0)
+  await $.tool.call(chk(LONGW))
+  expect(judge.calls.length).toBe(1)
+})
+test('0.6.17 deep-judge minWords is a pack value (0-500)', () => {
+  const pk = (n: number) => ({ version: BUNDLED_VERSION + 1, checks: { 'deep-judge': { numbers: { minWords: n } } } })
+  expect(validatePack(pk(0))).toEqual([])
+  expect(validatePack(pk(501)).join()).toMatch(/deep-judge\.numbers\.minWords/)
+  setRules(mergePack(pk(0)))
+  expect(skipJudge('Noted.')).toBe(false)
+  setRules(mergePack(pk(500)))
+  expect(skipJudge(LONGW)).toBe(true)
+})
+test('0.6.17 judge rules are overridable from the pack (length-bounded) and reach the request', async ($, on) => {
+  const rules = 'R'.repeat(150)
+  const pk = (t: string) => ({ version: BUNDLED_VERSION + 1, checks: { 'deep-judge': { messages: { rules: t } } } })
+  expect(validatePack(pk(rules))).toEqual([])
+  expect(validatePack(pk('too short')).join()).toMatch(/deep-judge\.messages\.rules/)
+  expect(validatePack(pk('x'.repeat(2501))).join()).toMatch(/deep-judge\.messages\.rules/)
+  const { judge } = deepEngine(on, pk(rules))
+  await $.turn.start(turn('t1'))
+  await $.tool.call(chk(LONGW))
+  expect(judge.calls[0].systemBlocks[0].text).toBe(rules)
+})
+test('0.6.17 the judge sees up to 6000 chars of hook evidence, 1500 per result', async ($, on) => {
+  const { judge } = deepEngine(on, false)
+  await $.turn.start(turn('t1'))
+  for (const tag of ['AAA', 'BBB', 'CCC', 'DDD', 'EEE']) { (judge as any).toolText = tag + 'x'.repeat(2000); await $.tool.call({ tool: 'Read', file_path: '/x' } as any) }
+  await $.tool.call(chk(LONGW))
+  const p: string = judge.calls[0].prompt
+  const he = p.slice(p.indexOf('<hook_evidence>'), p.indexOf('</hook_evidence>'))
+  expect(he.length).toBeGreaterThan(4000)
+  expect(he.length).toBeLessThan(6100)
+  expect(p.length).toBeLessThan(16_000) // ~4k tokens
+})
+test('0.6.17 parseJudge keeps at most 3 problems', () => {
+  expect(parseJudge('{"ok":false,"problems":["a","b","c","d"]}')!.problems).toEqual(['a', 'b', 'c'])
+})
+test('0.6.17 cleanProblem: quoted spans become "[…]", 160 chars max, deterministic tails dropped', () => {
+  expect(cleanProblem('judge: "chain closed" is not shown; say “fixed” only if run')).toBe('"[…]" is not shown; say "[…]" only if run')
+  expect(cleanProblem('x'.repeat(400)).length).toBe(160)
+  expect(cleanProblem('unbacked absolute claim (check it): Only teeth is high-ROI here', 'unbacked-absolute')).toBe('unbacked absolute claim (check it)')
+})
+test('0.6.17 deepRow shape: source deep, category pre-send, check ids, sanitised problems, no reply text', () => {
+  const r = deepRow([{ id: 'judge', text: 'judge: (b) "secret client words" unbacked' }, { id: 'prevention-line', text: 'prevention-line: add one' }], 'sent at cap', 'sess-1', 0)
+  expect(r).toMatchObject({ source: 'deep', category: 'pre-send', check_ids: ['judge', 'prevention-line'], outcome: 'sent at cap', session: 'sess-1', date: '1970-01-01', time: '08:00', words: '', auto: true })
+  expect(r.problems).toEqual(['unsupported claim', 'footer/format']) // generic labels only: no problem text reaches the Scoreboard
+  expect(JSON.stringify(r)).not.toMatch(/secret|unbacked/)
+})
+test('0.6.17 failed draft logs sanitised problems and queues a row; clean PASS marks it fixed; the cap marks it sent at cap', async ($, on) => {
+  const { mem, judge } = deepEngine(on, true)
+  judge.reply = FAIL_J
+  await $.turn.start(turn('t1'))
+  await $.tool.call(chk(CLEAN, { ask: 'status?', evidence: 'e' }))
+  expect((mem[DENY_LOG_KEY] as any[])[0].problems).toEqual(['"[…]" is not shown by the evidence; run the check or drop the claim'])
+  expect(mem.corrLog ?? []).toEqual([]) // no outcome yet: nothing queued
+  judge.reply = JUDGE_OK
+  expect(((await $.tool.call(chk(CLEAN))) as any).result).toMatch(/^PASS /)
+  const q = mem.corrLog as any[]
+  expect(q.length).toBe(1)
+  expect(q[0].data).toMatchObject({ source: 'deep', category: 'pre-send', outcome: 'fixed', check_ids: ['judge'] })
+  expect(q[0].data.time).toMatch(/^\d\d:\d\d$/); expect(q[0].data.date).toMatch(/^\d{4}-\d\d-\d\d$/)
+  expect(JSON.stringify(q)).not.toMatch(/Noted\. Two options/)
+  // cap path (new prompt epoch)
+  await $.turn.start(turn('t2'))
+  await $.tool.call(check(BADC)); await $.tool.call(check(BADC)); await $.tool.call(check(BADC))
+  const outs = (mem.corrLog as any[]).map(r => r.data.outcome)
+  expect(outs.filter(o => o === 'sent at cap').length).toBeGreaterThan(0)
+  expect(outs.every(o => o === 'fixed' || o === 'sent at cap')).toBe(true)
+})
+test('0.6.17 judgeLog rows carry token usage and a daily total is kept', async ($, on) => {
+  expect(tokensOf({ inputTokens: 10, output_tokens: 5, cache_read_input_tokens: 7, cacheCreationTokens: 3 })).toEqual({ input: 10, output: 5, cache: 10 })
+  expect(tokensOf(undefined)).toEqual({ input: 0, output: 0, cache: 0 })
+  const { mem, judge } = deepEngine(on, true)
+  judge.reply = { isAnswered: true, text: '{"ok":true,"problems":[]}', usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 50 } }
+  await $.turn.start(turn('t1'))
+  await $.tool.call(chk(CLEAN)); await $.tool.call(chk(CLEAN))
+  const row = (mem[JUDGE_KEY] as any[])[0]
+  expect(row).toMatchObject({ status: 'ok', input: 100, output: 20, cache: 50 })
+  expect(mem[JUDGE_TOKENS_KEY]).toMatchObject({ calls: 2, input: 200, output: 40, cache: 100 })
+})
+test('0.6.17 efficiency-none: after a failed round, "Efficiency: none" fails (counts toward the cap); with no earlier failure it passes', async ($, on) => {
+  const { mem } = deepEngine(on, true) // cap 2
+  await $.turn.start(turn('t1'))
+  const fine = `${CLEAN}\n**Efficiency:** none`
+  expect(((await $.tool.call(chk(fine))) as any).result).toMatch(/^PASS /) // no failed round yet
+  await $.tool.call(check(BADC)) // round 1 fails
+  const r = await $.tool.call(chk(fine)) as any
+  expect(r.result).toMatch(/Efficiency: none after 1 failed check round — say what would have made this reply reach J sooner/)
+  expect(r.result).toMatch(/\(2\/2\)/)
+  expect((mem[DENY_LOG_KEY] as any[]).some(x => x.checks.includes('efficiency-none'))).toBe(true)
+  const ok = await $.tool.call(chk(`${CLEAN}\n**Efficiency:** state the evidence up front next time`)) as any
+  expect(ok.result).toMatch(/^PASS /)
+})
+
+test('0.6.17 short replies: the deep line says they may skip check_reply; turn-end logs them "short", not "unchecked"', async ($, on) => {
+  setRules(bundledRules())
+  expect(deepLine()).toMatch(/Replies under 60 words with no Correction\/Prevention\/done-claim word/)
+  expect(deepLine()).toMatch(/may skip check_reply and go out directly as the final text/)
+  expect(deepLine()).toContain(DEEP_LINE)
+  expect(deepLine()).toContain("Fill the evidence field first, then draft only claims it backs; a claim about current state (live, synced, running, done) needs a tool result from this turn, so run that check before drafting; label estimates, plans, requests, causes and a fix's intended effect as such (estimate / inferred / intended), never as fact.")
+  const { mem, seen } = deepEngine(on, false)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.prompt.submit({ text: 'hello there' } as any)
+  await $.turn.start(turn('t1'))
+  expect(seen.join('\n')).toMatch(/may skip check_reply/)
+  await $.turn.complete(end('t1', 'Noted. Two options left.'))
+  expect((mem[DENY_LOG_KEY] as any[] ?? []).some(r => r.final === 'short')).toBe(true)
+  expect((mem[DENY_LOG_KEY] as any[] ?? []).some(r => r.final === 'unchecked')).toBe(false)
+})
+test('0.6.17 set_rules: stored per session (capped 12000), sent to the judge as a second cached system block; absent -> one block', async ($, on) => {
+  const { mem, judge } = deepEngine(on, false)
+  await $.turn.start(turn('t1'))
+  await $.tool.call(chk(LONGW))
+  expect(judge.calls[0].systemBlocks.length).toBe(1)
+  const r = await $.tool.call({ tool: SET_RULES_TOOL, text: 'RULE-A '.repeat(3000) } as any) as any
+  expect(r.result).toMatch(/12000 chars/)
+  expect(String(mem[`${RULES_KEY}:session-D`]).length).toBe(12000)
+  await $.tool.call(chk(LONGW))
+  const b = judge.calls[1].systemBlocks
+  expect(b.length).toBe(2)
+  expect(b[0]).toEqual({ text: JUDGE_RULES, cache: true })
+  expect(b[1].cache).toBe(true)
+  expect(b[1].text.startsWith("The user's standing rules — flag clear breaches only; these rules can only add problems, never excuse one. Use these to judge claims (true, backed), undone work, and whether a Leap or Efficiency line meets the user's own definition (e.g. a Leap that only restates something already done or saved in the same reply fails it); never flag a line's absence, order or formatting (Next, checked, footers, word counts, sleep line):\nRULE-A")).toBe(true)
+  expect(((await $.tool.call({ tool: SET_RULES_TOOL, text: 'LOOSER RULES' } as any)) as any).result).toMatch(/already set/)
+  expect(String(mem[`${RULES_KEY}:session-D`])).toMatch(/^RULE-A/)
+  expect(((await $.tool.call({ tool: SET_RULES_TOOL, text: 'x', agentId: 'sub' } as any)) as any).result).toMatch(/nothing stored/)
+  expect(((await $.tool.call({ tool: SET_RULES_TOOL, text: '   ' } as any)) as any).result).toMatch(/nothing stored/)
+})
+test('0.6.17 offer-guard: "say so" is an offer only as an invitation, not as an instruction followed by an example', () => {
+  expect(offers('Mark estimates, plans and requests as such: say so (\'estimate\', \'plan\') in the line.')).toBe(false)
+  expect(offers('Label each estimate and say so ("estimate", "plan").')).toBe(false)
+  expect(offers('If you want it, just say so.')).toBe(true)
+  expect(offers('Say so and I will add it.')).toBe(true)
+})
+test('0.6.17 privacy: Scoreboard rows carry only generic problem labels; full sanitised text stays in the local deepDenialLog', async ($, on) => {
+  const { mem, judge } = deepEngine(on, true)
+  judge.reply = { isAnswered: true, text: '{"ok":false,"problems":["(c) Acme Holdings deal left undone: start the redraft"]}', usage: {} }
+  await $.turn.start(turn('t1'))
+  await $.tool.call(chk(CLEAN))
+  judge.reply = JUDGE_OK
+  await $.tool.call(chk(CLEAN))
+  const row = (mem.corrLog as any[])[0].data
+  expect(row.problems).toEqual(['undone work'])
+  expect(JSON.stringify(mem.corrLog)).not.toMatch(/Acme|redraft/)
+  expect((mem[DENY_LOG_KEY] as any[])[0].problems[0]).toMatch(/Acme Holdings/) // local log keeps the sanitised text
+  expect(JUDGE_RULES).toMatch(/\(a\|b\|c\|d\) short problem/)
+  expect(['a', 'b', 'c', 'd'].map(l => problemLabel({ id: 'judge', text: `judge: (${l}) x` }))).toEqual(['contradicted claim', 'unsupported claim', 'undone work', 'unanswered question'])
+  expect(problemLabel({ id: 'judge', text: 'judge: something odd' })).toBe('other')
+})
+
+test('0.6.17 set_rules + judge: a Leap restating its own Done item is a judge problem (mocked); a draft missing Next is not', async ($, on) => {
+  const { judge } = deepEngine(on, false)
+  await $.turn.start(turn('t1'))
+  await $.tool.call({ tool: SET_RULES_TOOL, text: 'Leap: one non-obvious idea beyond the next step.' } as any)
+  judge.reply = { isAnswered: true, text: '{"ok":false,"problems":["(b) Leap restates the Done item; give a new idea"]}', usage: {} }
+  const r = await $.tool.call(chk(`${LONGW}\nDone: saved the file.\n**Leap:** saved the file`)) as any
+  expect(r.result).toMatch(/judge: \(b\) Leap restates the Done item/)
+  judge.reply = JUDGE_OK
+  expect(((await $.tool.call(chk(`${LONGW}\nDone: result stated.`))) as any).result).toMatch(/^PASS /) // no Next line: nothing flagged
+  expect(judge.calls[0].systemBlocks[1].text).toMatch(/never flag a line's absence, order or formatting \(Next, checked/)
+})
+test('0.6.17 caps: a judge (a)/(b) problem gets one extra round; untagged stay at cap 1; the judge runs at the cap; (a)/(b) at the cap go to the note', async ($, on) => {
+  const { judge, mem } = deepEngine(on, false)
+  const J = (t: string) => ({ isAnswered: true, text: JSON.stringify({ ok: false, problems: [t] }), usage: {} })
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.prompt.submit({ text: 'first' } as any)
+  await $.turn.start(turn('t1'))
+  judge.reply = J('(b) "done" is not shown')
+  expect(((await $.tool.call(chk(LONGW))) as any).result).toMatch(/\(1\/1\)/)
+  expect(((await $.tool.call(chk(LONGW))) as any).result).toMatch(/\(2\/1\)/) // extra judged round
+  const third = await $.tool.call(chk(LONGW)) as any
+  expect(third.result).toMatch(/^PASS \S+ \(note: 1 failed checks, open problems: judge: \(b\)/)
+  expect(judge.calls.length).toBe(3) // judge ran at the cap
+  expect((mem.corrLog as any[]).some(r => r.data.outcome === 'sent at cap' && r.data.problems.includes('unsupported claim'))).toBe(true)
+  await $.turn.complete(end('t1', 'ok'))
+  await $.prompt.submit({ text: 'again' } as any)
+  await $.turn.start(turn('t2'))
+  judge.reply = J('(c) work left undone')
+  expect(((await $.tool.call(chk(LONGW))) as any).result).toMatch(/\(1\/1\)/)
+  expect(((await $.tool.call(chk(LONGW))) as any).result).toMatch(/^PASS \S+ \(note:/) // non-claim problems keep cap 1
+})
+test('0.6.17 efficiency-none counts only when the effective cap is 2 (after a judged (a)/(b) round); else it goes into the note', async ($, on) => {
+  const { judge } = deepEngine(on, false)
+  const eff = `${LONGW}\n**Efficiency:** none`
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.prompt.submit({ text: 'first' } as any)
+  await $.turn.start(turn('t1'))
+  judge.reply = { isAnswered: true, text: '{"ok":false,"problems":["(c) undone"]}', usage: {} }
+  await $.tool.call(chk(LONGW)) // untagged round 1 (cap 1 now used)
+  judge.reply = JUDGE_OK
+  expect(((await $.tool.call(chk(eff))) as any).result).toMatch(/^PASS \S+ \(note: 1 failed checks, open problems: Efficiency: none after 1/) // note only
+  await $.turn.complete(end('t1', 'ok'))
+  await $.prompt.submit({ text: 'next' } as any)
+  await $.turn.start(turn('t2'))
+  judge.reply = { isAnswered: true, text: '{"ok":false,"problems":["(a) contradicted"]}', usage: {} }
+  await $.tool.call(chk(LONGW)) // claim round
+  judge.reply = JUDGE_OK
+  expect(((await $.tool.call(chk(eff))) as any).result).toMatch(/\(2\/1\).*Efficiency: none after 1/)
+})
+test('0.6.17 yes/no asks never skip the judge; widened claim words; single quotes masked in the local log', async ($, on) => {
+  setRules(bundledRules())
+  expect(skipJudge('Noted.', 'Is it done?')).toBe(false)
+  expect(skipJudge('Noted.', 'Do it')).toBe(true)
+  for (const w of ['passed', 'complete', 'sent', 'uploaded', 'deleted', 'booked', 'tested', 'confirmed', 'ran', 'merged', 'pushed', 'deployed', 'yes']) expect(skipJudge(`Result: ${w}.`)).toBe(false)
+  expect(cleanProblem("(a) says 'Acme deal' and ‘Beta Corp’ ok")).toBe('(a) says "[…]" and "[…]" ok')
+  expect(deepLine()).toMatch(/not answering a yes\/no question/)
+})
+
+test('0.6.17 judge problems saying a Leap/Efficiency/Next/checked/sleep line is missing are dropped; other problems stay', async ($, on) => {
+  const { judge } = deepEngine(on, false)
+  await $.turn.start(turn('t1'))
+  judge.reply = { isAnswered: true, text: '{"ok":false,"problems":["(d) Leap line is missing","(a) no Next line","(b) \\"done\\" is not shown"]}', usage: {} }
+  const r = await $.tool.call(chk(LONGW)) as any
+  expect(r.result).toMatch(/judge: \(b\)/)
+  expect(r.result).not.toMatch(/Leap line is missing|no Next line/)
+  judge.reply = { isAnswered: true, text: '{"ok":false,"problems":["Efficiency line absent","missing sleep line"]}', usage: {} }
+  expect(((await $.tool.call(chk(LONGW))) as any).result).toMatch(/^PASS /)
+  expect(MISSING_LINE.test('"done" is not shown by the evidence')).toBe(false)
+})
+test('0.6.17 an offer to do work later is caught by offer-guard in check_reply, not the judge', async ($, on) => {
+  const { judge } = deepEngine(on, false)
+  await $.turn.start(turn('t1'))
+  const r = await $.tool.call(chk('I can also check the cross-references later if you want.')) as any
+  expect(r.result).toMatch(/offer waiting on J/)
+  expect(r.result).not.toMatch(/judge:/)
+  expect(judge.calls.length).toBe(0)
+})
+
+// 0.6.18 per-session rolling evidence
+const SE = 'sessionEvidence:session-D'
+const sessionP = (j: any): string => { const p: string = j.calls[j.calls.length - 1].prompt; return p.slice(p.indexOf('<session_evidence>'), p.indexOf('</session_evidence>')) }
+test('0.6.18 session evidence: captures tool results (800), agent hand-backs (1500) and own replies (600); agent index kept', async ($, on) => {
+  const { mem, judge } = deepEngine(on, false)
+  ;(judge as any).toolText = 'TOOLOUT ' + 'q'.repeat(2000)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.prompt.submit({ text: 'first' } as any)
+  await $.turn.start(turn('t1'))
+  await $.tool.call({ tool: 'Read', file_path: '/x' } as any)
+  expect(String(mem[SE]).match(/q+/)![0].length).toBeLessThanOrEqual(800)
+  const raw1 = String(mem[SE])
+  expect(raw1).toMatch(/tool Read\]/)
+  await $.prompt.submit({ text: '<agent-message>AGENTREPORT ' + 'y'.repeat(3000) + '</agent-message>', origin: { kind: 'agent-message' } } as any)
+  await $.prompt.submit({ text: '<task-notification><status>completed</status>NOTE</task-notification>', origin: { kind: 'task-notification' } } as any)
+  await $.tool.call({ tool: 'SubagentHandback', message: 'HANDBACK ' + 'z'.repeat(3000) } as any)
+  await $.turn.complete(end('t1', 'PRIORREPLY ' + 'r'.repeat(900)))
+  const raw = String(mem[SE])
+  expect(raw).toContain('AGENTREPORT')
+  expect(raw).toContain('NOTE')
+  expect(raw).toContain('HANDBACK')
+  expect(raw).toContain('PRIORREPLY')
+  expect(raw.match(/y+/g)!.sort((a, b) => b.length - a.length)[0].length).toBeLessThanOrEqual(1500)
+  expect(raw.match(/r{20,}/g)![0].length).toBeLessThanOrEqual(600)
+  expect((mem['agentReports:session-D'] as any[]).length).toBe(3)
+  // a J message and a subagent's own call are not captured
+  await $.prompt.submit({ text: 'JMESSAGE here' } as any)
+  await $.tool.call({ tool: 'Read', agentId: 'a1' } as any)
+  expect(String(mem[SE])).not.toContain('JMESSAGE')
+})
+test('0.6.18 session evidence: store keeps the last sessionChars, oldest dropped; pack value 0 turns it off; ranges validated', async ($, on) => {
+  const { mem, judge } = deepEngine(on, { version: BUNDLED_VERSION + 1, checks: { 'deep-evidence': { numbers: { sessionChars: 3000, judgeChars: 1000 } } } })
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.turn.start(turn('t1'))
+  for (const tag of ['AAA', 'BBB', 'CCC', 'DDD', 'EEE', 'FFF']) { (judge as any).toolText = tag + 'x'.repeat(790); await $.tool.call({ tool: 'Read', file_path: '/x' } as any) }
+  const raw = String(mem[SE])
+  expect(raw.length).toBeLessThanOrEqual(3000)
+  expect(raw).toContain('FFF')
+  expect(raw).not.toContain('AAA')
+  await $.turn.complete(end('t1', 'ok'))
+  await $.turn.start(turn('t2'))
+  await $.tool.call(chk(LONGW))
+  const b = sessionP(judge)
+  expect(b.length).toBeLessThanOrEqual('<session_evidence>\n'.length + 1010)
+  expect(b.indexOf('FFF')).toBeLessThan(b.indexOf('EEE')) // most recent first
+  expect(validatePack({ version: BUNDLED_VERSION + 1, checks: { 'deep-evidence': { numbers: { sessionChars: 40001 } } } } as any).join()).toMatch(/sessionChars/)
+  expect(validatePack({ version: BUNDLED_VERSION + 1, checks: { 'deep-evidence': { numbers: { judgeChars: 20001 } } } } as any).join()).toMatch(/judgeChars/)
+  expect(validatePack({ version: BUNDLED_VERSION + 1, checks: { 'deep-evidence': { numbers: { sessionChars: 0, judgeChars: 0 } } } } as any)).toEqual([])
+})
+test('0.6.18 session evidence off (0): nothing stored, no block in the judge prompt', async ($, on) => {
+  const { mem, judge } = deepEngine(on, { version: BUNDLED_VERSION + 1, checks: { 'deep-evidence': { numbers: { sessionChars: 0 } } } })
+  await $.turn.start(turn('t1'))
+  await $.tool.call({ tool: 'Read', file_path: '/x' } as any)
+  await $.tool.call(chk(LONGW))
+  expect(mem[SE]).toBeUndefined()
+  expect(String(judge.calls[0].prompt)).not.toContain('<session_evidence>')
+})
+test('0.6.18 judge prompt: block follows hook_evidence, total bounded (~6k tokens), JUDGE_RULES mentions session_evidence', async ($, on) => {
+  const { judge } = deepEngine(on, false)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.turn.start(turn('t1'))
+  for (let i = 0; i < 60; i++) { (judge as any).toolText = `T${i} ` + 'x'.repeat(790); await $.tool.call({ tool: 'Read', file_path: '/x' } as any) }
+  await $.turn.complete(end('t1', 'ok'))
+  await $.turn.start(turn('t2'))
+  await $.tool.call(chk(LONGW, { evidence: 'e'.repeat(2500) }))
+  const p: string = judge.calls[0].prompt
+  expect(p.indexOf('<session_evidence>')).toBeGreaterThan(p.indexOf('</hook_evidence>'))
+  expect(p.indexOf('</session_evidence>')).toBeLessThan(p.indexOf('Hook facts'))
+  expect(p.length).toBeLessThan(26_000)
+  expect(JUDGE_RULES).toMatch(/Tool results and agent reports in session_evidence back a claim; the assistant's own prior statements never do/)
+  expect(judge.calls[0].systemBlocks[0].text).toContain('session_evidence')
+})
+test('0.6.18 a mocked judge passes a claim supported only by an earlier agent report (it sees the report); Scoreboard rows unchanged', async ($, on) => {
+  const { judge, mem } = deepEngine(on, false)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.prompt.submit({ text: 'first' } as any)
+  await $.turn.start(turn('t1'))
+  await $.prompt.submit({ text: '<agent-message>Agent report: merged PR 41, sha deadbeef.</agent-message>', origin: { kind: 'agent-message' } } as any)
+  await $.turn.complete(end('t1', 'ok'))
+  await $.prompt.submit({ text: 'status?' } as any)
+  await $.turn.start(turn('t2'))
+  judge.reply = (e: any) => String(e.prompt).includes('<session_evidence>') && /sha deadbeef/.test(String(e.prompt).split('<session_evidence>')[1].split('</session_evidence>')[0])
+    ? JUDGE_OK : { isAnswered: true, text: '{"ok":false,"problems":["(b) merge not shown"]}', usage: {} }
+  const r = await $.tool.call(chk(`${LONGW}\nDone: PR 41 merged (sha deadbeef).`, { evidence: 'sha deadbeef merged \u2190 agent report 12:01' })) as any
+  expect(r.result).toMatch(/^PASS /)
+  expect(JSON.stringify(mem.corrLog ?? [])).not.toMatch(/deadbeef|Agent report/)
+  for (const [k, v] of Object.entries(mem)) if (!k.startsWith('sessionEvidence') && !k.startsWith('agentReports')) expect([k, JSON.stringify(v)]).not.toContain('deadbeef')
+})
+
+test('0.6.18 deep Scoreboard rows: fail -> fail -> PASS-at-cap -> final text queues "sent at cap" rows; fail -> PASS queues "fixed"', async ($, on) => {
+  const { judge, mem } = deepEngine(on, false)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  const J = (t: string) => ({ isAnswered: true, text: JSON.stringify({ ok: false, problems: [t] }), usage: {} })
+  const deep = () => ((mem.corrLog as any[]) ?? []).filter(r => r.data.source === 'deep')
+  await $.prompt.submit({ text: 'first' } as any)
+  await $.turn.start(turn('t1'))
+  judge.reply = J('(b) unsupported')
+  await $.tool.call(chk(LONGW)); await $.tool.call(chk(LONGW))
+  expect(deep().length).toBe(0) // held until an outcome
+  expect(((await $.tool.call(chk(LONGW))) as any).result).toMatch(/^PASS \S+ \(note/)
+  expect(deep().map(r => r.data.outcome)).toEqual(['sent at cap', 'sent at cap', 'sent at cap'])
+  await $.turn.complete(end('t1', LONGW))
+  expect(deep().length).toBe(3) // the final-text turn end adds none and drops none
+  await $.prompt.submit({ text: 'second' } as any)
+  await $.turn.start(turn('t2'))
+  judge.reply = J('(b) unsupported')
+  await $.tool.call(chk(LONGW))
+  judge.reply = JUDGE_OK
+  expect(((await $.tool.call(chk(LONGW))) as any).result).toMatch(/^PASS \S+$/)
+  await $.turn.complete(end('t2', LONGW))
+  const rows = deep()
+  expect(rows.length).toBe(4)
+  expect(rows[3].data).toMatchObject({ source: 'deep', outcome: 'fixed', problems: ['unsupported claim'] })
+})
+
+test('0.6.18 session facts line: present on a J prompt in deep mode, bounded, off at 0, absent in light mode and for agent prompts', async ($, on) => {
+  const { seen, judge } = deepEngine(on, { version: BUNDLED_VERSION + 1, checks: { 'deep-evidence': { numbers: { factsChars: 300 } } } })
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.prompt.submit({ text: 'first' } as any)
+  await $.turn.start(turn('t1'))
+  ;(judge as any).toolText = 'dispatch-guard 0.6.17 in use ' + 'x'.repeat(2000)
+  await $.tool.call({ tool: 'Bash', command: 'ls' } as any)
+  await $.prompt.submit({ text: '<agent-message>AGENTHEAD report one</agent-message>', origin: { kind: 'agent-message' } } as any)
+  await $.turn.complete(end('t1', 'PRIORHEAD done'))
+  await $.prompt.submit({ text: 'second' } as any)
+  const last = seen[seen.length - 1]
+  const line = last.split('\n').find(l => l.startsWith('Session facts:'))!
+  expect(line).toBeDefined()
+  expect(line.length).toBeLessThanOrEqual(300)
+  expect(line).toMatch(/AGENTHEAD/)
+  expect(line).toMatch(/PRIORHEAD/)
+  expect(line).toMatch(/dispatch-guard 0\.6\.17/)
+  expect(seen[seen.length - 1].match(/Session facts:/g)!.length).toBe(1)
+  // agent-origin prompt: no facts line
+  await $.turn.complete(end('t1', 'x'))
+  await $.prompt.submit({ text: '<agent-message>zzz</agent-message>', origin: { kind: 'agent-message' } } as any)
+  expect(seen[seen.length - 1]).not.toContain('Session facts:')
+  await $.prompt.submit({ text: 'light mode' } as any)
+  await $.prompt.submit({ text: 'third' } as any)
+  expect(seen[seen.length - 1]).not.toContain('Session facts:')
+})
+test('0.6.18 session facts line: factsChars 0 turns it off', async ($, on) => {
+  const { seen } = deepEngine(on, { version: BUNDLED_VERSION + 1, checks: { 'deep-evidence': { numbers: { factsChars: 0 } } } })
+  await $.prompt.submit({ text: 'first' } as any)
+  expect(seen[seen.length - 1]).not.toContain('Session facts:')
+  expect(validatePack({ version: BUNDLED_VERSION + 1, checks: { 'deep-evidence': { numbers: { factsChars: 2001 } } } } as any).join()).toMatch(/factsChars/)
+})
+
+test('0.6.18 own prior replies are not evidence: kept out of the judge block (mocked judge sees no reply text); a claim backed only by a prior reply is a judge problem', async ($, on) => {
+  const { judge } = deepEngine(on, false)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.prompt.submit({ text: 'first' } as any)
+  await $.turn.start(turn('t1'))
+  await $.tool.call({ tool: 'Read', file_path: '/x' } as any)
+  await $.turn.complete(end('t1', '0.6.18 is live, verified earlier. PRIORCLAIM'))
+  await $.prompt.submit({ text: 'status?' } as any)
+  await $.turn.start(turn('t2'))
+  judge.reply = (e: any) => String(e.prompt).includes('PRIORCLAIM') ? JUDGE_OK : { isAnswered: true, text: '{"ok":false,"problems":["(b) \\"live\\" is backed only by an earlier reply"]}', usage: {} }
+  const r = await $.tool.call(chk(`${LONGW}\n0.6.18 is live (verified earlier).`, { evidence: 'live, verified earlier \u2190 agent report 12:01' })) as any
+  expect(r.result).toMatch(/judge: \(b\)/)
+  expect(String(judge.calls[0].prompt)).not.toContain('PRIORCLAIM')
+  expect(JUDGE_RULES.split(/\s+/).length).toBeLessThanOrEqual(250)
+})
+test('0.6.18 MISSING_LINE drops only missing-footer problems', () => {
+  for (const t of ['(b) "deployed": no tool result shows it; run the check next', '(b) "verified" but no file was checked this turn', '(c) the draft says wait; no need to wait for the next turn', '(a) the log is missing; the next run shows 2 fails']) expect([t, MISSING_LINE.test(t)]).toEqual([t, false])
+  for (const t of ['Leap line is missing', 'no Next line', 'Efficiency footer absent', 'missing **Leap** line', 'the Efficiency and Leap footers required for substantive replies are missing']) expect([t, MISSING_LINE.test(t)]).toEqual([t, true])
+})
+test('0.6.18 retention: sessions are indexed and evidence of all but the last 20 is cleared', async ($, on) => {
+  const { mem, sidBox } = deepEngine(on, false)
+  for (let i = 0; i < 23; i++) { sidBox.v = `s${i}`; await $.prompt.submit({ text: `<agent-message>R${i}</agent-message>`, origin: { kind: 'agent-message' } } as any) }
+  expect((mem[SESSION_INDEX_KEY] as string[]).length).toBe(KEEP_SESSIONS)
+  for (const i of [0, 1, 2]) { expect(mem[`sessionEvidence:s${i}`]).toBe(''); expect(mem[`agentReports:s${i}`]).toEqual([]) }
+  expect(String(mem['sessionEvidence:s22'])).toContain('R22')
+  expect(String(mem['sessionEvidence:s3'])).toContain('R3')
+})
+test('0.6.18 the session block excludes the running turn\'s tool entries (already in hook_evidence) but keeps its agent reports', () => {
+  const RS = '\u241E'
+  const raw = `${RS}[#t1 11-09T08:00 tool Read] OLDTOOL\n${RS}[#t2 11-09T08:01 tool Read] CURTOOL\n${RS}[#t2 11-09T08:01 agent agent-message] CURAGENT\n${RS}[#t1 11-09T08:00 reply] REPLY\n`
+  const b = sessionBlock(raw, 5000, 't2')
+  expect(b).toContain('OLDTOOL'); expect(b).toContain('CURAGENT')
+  expect(b).not.toContain('CURTOOL'); expect(b).not.toContain('REPLY')
+})
+test('0.6.18 light mode: tool calls and turn ends make no evidence writes', async ($, on) => {
+  const { mem, judge } = deepEngine(on, false)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.prompt.submit({ text: 'light mode' } as any)
+  await $.turn.start(turn('t1'))
+  ;(judge as any).toolText = 'out'
+  await $.tool.call({ tool: 'Read', file_path: '/x' } as any)
+  await $.prompt.submit({ text: '<agent-message>A</agent-message>', origin: { kind: 'agent-message' } } as any)
+  await $.turn.complete(end('t1', 'reply'))
+  expect(Object.keys(mem).filter(k => /^(sessionEvidence|agentReports|sessionIndex)/.test(k))).toEqual([])
+})
+
+// 0.6.19 deep-stats: one upserted Scoreboard row per session per day
+const statRows = (mem: Record<string, unknown>) => ((mem.corrLog as any[]) ?? []).filter(r => r.data.source === 'deep-stats')
+const SHORT = 'Noted. Two options left.'
+test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft passes, 3 rounds; judge and token sums from judgeLog', async ($, on) => {
+  const { mem, judge } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  judge.reply = { isAnswered: true, text: '{"ok":true,"problems":[]}', usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 50 } }
+  await $.prompt.submit({ text: 'first' } as any)
+  await $.turn.start(turn('t1'))
+  await $.tool.call(check(BADC)); await $.tool.call(check(BADC))
+  expect(((await $.tool.call(chk(CLEAN))) as any).result).toMatch(/^PASS /)
+  expect(statRows(mem).length).toBe(0) // written at the turn end
+  await $.turn.complete(end('t1', CLEAN))
+  const rows = statRows(mem)
+  expect(rows.length).toBe(1)
+  const d = rows[0].data
+  expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
+  expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 3, judge_ok: 3, judge_unavailable: 0, tokens_in: 300, tokens_out: 60, tokens_cache: 150 })
+  expect(PLUGIN_VERSION).toBe('0.6.19')
+})
+test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
+  const { mem } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.prompt.submit({ text: 'first' } as any)
+  await $.turn.start(turn('t1'))
+  await $.tool.call(chk(CLEAN))
+  await $.turn.complete(end('t1', CLEAN))
+  expect(statRows(mem)[0].data).toMatchObject({ prompts_judged: 1, first_draft_pass: 1, rounds_total: 1 })
+  await $.prompt.submit({ text: 'second' } as any)
+  await $.turn.start(turn('t2'))
+  await $.tool.call(check(BADC))
+  await $.tool.call(chk(CLEAN))
+  await $.turn.complete(end('t2', CLEAN))
+  const rows = statRows(mem)
+  expect(rows.length).toBe(1)
+  expect(rows[0].data).toMatchObject({ prompts_judged: 2, first_draft_pass: 1, rounds_total: 3 })
+})
+test('0.6.19 deep-stats: a short reply that skips check_reply counts as judged and first-draft pass; a long unchecked final counts as neither', async ($, on) => {
+  const { mem } = deepEngine(on, false)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.prompt.submit({ text: 'first' } as any)
+  await $.turn.start(turn('t1'))
+  await $.turn.complete(end('t1', SHORT))
+  expect(statRows(mem)[0].data).toMatchObject({ prompts_judged: 1, first_draft_pass: 1, rounds_total: 0, judge_calls: 0 })
+  await $.prompt.submit({ text: 'second' } as any)
+  await $.turn.start(turn('t2'))
+  await $.turn.complete(end('t2', LONGW))
+  expect(statRows(mem)[0].data).toMatchObject({ prompts_judged: 1, first_draft_pass: 1 })
+})
+test('0.6.19 deep-stats: the row has only the listed count fields, no draft/problem/evidence text', async ($, on) => {
+  const { mem } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.prompt.submit({ text: 'first' } as any)
+  await $.turn.start(turn('t1'))
+  await $.tool.call(chk(`${BADC} SECRETDRAFTWORD`, { evidence: 'SECRETEVIDENCE', ask: 'SECRETASK' }))
+  await $.tool.call(chk(CLEAN))
+  await $.turn.complete(end('t1', CLEAN))
+  const d = statRows(mem)[0].data
+  expect(Object.keys(d).sort()).toEqual(['date', 'first_draft_pass', 'judge_calls', 'judge_ok', 'judge_unavailable', 'plugin_version', 'prompts_judged', 'rounds_total', 'session', 'source', 'tokens_cache', 'tokens_in', 'tokens_out', 'unchecked'])
+  expect(JSON.stringify(statRows(mem))).not.toMatch(/SECRET|Correction|date was wrong/)
+  for (const v of Object.values(d)) expect(typeof v === 'string' ? v.length < 60 : typeof v === 'number').toBe(true)
+})
+test('0.6.19 deep-stats: judge totals are running per-session counters (unavailable counted apart), not summed from the shared judgeLog', async ($, on) => {
+  const { mem, judge, sidBox } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  mem[JUDGE_KEY] = Array.from({ length: 5 }, () => ({ session: 'session-D', time: '2000-01-01T00:00:00+08:00', status: 'ok', input: 999 })) // foreign rows must not count
+  await $.prompt.submit({ text: 'first' } as any)
+  await $.turn.start(turn('t1'))
+  judge.reply = { isAnswered: true, text: '{"ok":true,"problems":[]}', usage: { inputTokens: 5, outputTokens: 1, cacheReadTokens: 2 } }
+  await $.tool.call(chk(CLEAN))
+  judge.reply = { isAnswered: false, text: '', usage: {} }
+  await $.tool.call(chk(CLEAN))
+  await $.turn.complete(end('t1', CLEAN))
+  expect(statRows(mem)[0].data).toMatchObject({ judge_calls: 2, judge_ok: 1, judge_unavailable: 1, tokens_in: 5, tokens_out: 1, tokens_cache: 2 })
+  sidBox.v = 'session-E' // another session keeps its own totals
+  await $.prompt.submit({ text: 'again' } as any)
+  await $.turn.start(turn('t2'))
+  await $.tool.call(chk(CLEAN))
+  await $.turn.complete(end('t2', CLEAN))
+  expect(statRows(mem).map(r => r.data.judge_calls).sort()).toEqual([1, 2])
+})
+test('0.6.19 deep-stats: a prompt answered only via SendUserMessage (empty final text) is counted once, with its rounds', async ($, on) => {
+  const { mem } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.prompt.submit({ text: 'first' } as any)
+  await $.turn.start(turn('t1'))
+  await $.tool.call(check(BADC))
+  await $.tool.call(chk(CLEAN))
+  await $.turn.complete(end('t1', ''))
+  expect(statRows(mem)[0].data).toMatchObject({ prompts_judged: 1, first_draft_pass: 0, rounds_total: 2, unchecked: 0 })
+  await $.prompt.submit({ text: 'second' } as any)
+  await $.turn.start(turn('t2'))
+  await $.turn.complete(end('t2', ''))
+  expect(statRows(mem)[0].data).toMatchObject({ prompts_judged: 1 }) // no reply, no rounds: nothing to count
+})
+test('0.6.19 deep-stats: unchecked counts long final replies that never went through check_reply', async ($, on) => {
+  const { mem } = deepEngine(on, false)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.prompt.submit({ text: 'first' } as any)
+  await $.turn.start(turn('t1'))
+  await $.turn.complete(end('t1', LONGW))
+  expect(statRows(mem)[0].data).toMatchObject({ prompts_judged: 0, first_draft_pass: 0, unchecked: 1 })
+  await $.prompt.submit({ text: 'second' } as any)
+  await $.turn.start(turn('t2'))
+  await $.tool.call(chk(LONGW))
+  await $.turn.complete(end('t2', LONGW)) // the final text matches the PASS: not unchecked
+  expect(statRows(mem)[0].data).toMatchObject({ prompts_judged: 1, first_draft_pass: 1, unchecked: 1 })
+})
+test('0.6.19 PLUGIN_VERSION is a semver (equality with plugin.json is enforced by tools/build-zip.sh: a hooks test cannot read non-code files)', () => {
+  expect(PLUGIN_VERSION).toMatch(/^\d+\.\d+\.\d+$/)
+})
+test('0.6.19 deep-stats: light mode writes no stats row and keeps no stats state', async ($, on) => {
+  const { mem } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.prompt.submit({ text: 'light mode' } as any)
+  await $.turn.complete(end('t0', 'ok'))
+  await $.prompt.submit({ text: 'first' } as any)
+  await $.turn.start(turn('t1'))
+  await $.turn.complete(end('t1', SHORT))
+  expect(statRows(mem).length).toBe(0)
+  expect(Object.keys(mem).filter(k => k.startsWith('deepStats:'))).toEqual([])
+})
+
+// 0.6.19 source gate: state/done sentences need a cited evidence line or an inline label, checked before the judge. Log-only by default (sourceGate 1); live at 2.
+const GATE_LIVE = { version: BUNDLED_VERSION + 1, checks: { 'deep-evidence': { numbers: { sourceGate: 2 } } } }
+test('0.6.19 source gate (live): an unmatched state sentence fails check_reply without a judge call and counts as a failed round', async ($, on) => {
+  const { judge, mem } = deepEngine(on, GATE_LIVE)
+  await $.turn.start(turn('t1'))
+  const r = await $.tool.call(chk(`${LONGW}\nThe deploy is verified and tested.`, { evidence: 'nothing relevant' })) as any
+  expect(r.result).toMatch(/cite a source in evidence or label it/)
+  expect(r.result).toMatch(/\(1\/1\)/)
+  expect(judge.calls.length).toBe(0)
+  expect(String(mem['deepDenials:session-D'])).toMatch(/:1$/)
+})
+test('0.6.19 source gate: dark by default (logged dark:true, never fails, judge runs); pack 0 skips it; range is 0-2', async ($, on) => {
+  const { judge, mem } = deepEngine(on, false)
+  await $.turn.start(turn('t1'))
+  expect(((await $.tool.call(chk(`${LONGW}\nThe deploy is verified and tested.`, { evidence: '' }))) as any).result).toMatch(/^PASS /)
+  expect(judge.calls.length).toBe(1)
+  expect((mem[DENY_LOG_KEY] as any[]).some(r => r.dark === true && r.checks.includes('source-gate'))).toBe(true)
+  expect(validatePack({ version: BUNDLED_VERSION + 1, checks: { 'deep-evidence': { numbers: { sourceGate: 3 } } } }).length).toBeGreaterThan(0)
+  expect(validatePack(GATE_LIVE).length).toBe(0)
+})
+test('0.6.19 source gate: pack sourceGate 0 logs nothing', async ($, on) => {
+  const { mem } = deepEngine(on, { version: BUNDLED_VERSION + 1, checks: { 'deep-evidence': { numbers: { sourceGate: 0 } } } })
+  await $.turn.start(turn('t1'))
+  await $.tool.call(chk(`${LONGW}\nThe deploy is verified and tested.`, { evidence: '' }))
+  expect(((mem[DENY_LOG_KEY] as any[]) ?? []).some(r => r.checks?.includes('source-gate'))).toBe(false)
+})
+test('0.6.19 source gate (live): a cited, time-stamped evidence line proceeds to the judge; a source-less line does not count', async ($, on) => {
+  const { judge } = deepEngine(on, GATE_LIVE)
+  await $.turn.start(turn('t1'))
+  const ok = await $.tool.call(chk(`${LONGW}\nThe deploy is verified.`, { evidence: 'deploy verified \u2190 Bash curl 12:03' })) as any
+  expect(ok.result).toMatch(/^PASS /)
+  expect(judge.calls.length).toBe(1)
+  for (const ev of ['deploy verified', 'deploy verified \u2190 Bash curl']) expect(((await $.tool.call(chk(`${LONGW}\nThe deploy is verified.`, { evidence: ev }))) as any).result).toMatch(/cite a source/)
+  expect(judge.calls.length).toBe(1)
+})
+test('0.6.19 source gate (live): labels count with or without brackets (intended, estimated, inferred, planned, requested, unverified)', async ($, on) => {
+  const { judge } = deepEngine(on, GATE_LIVE)
+  await $.turn.start(turn('t1'))
+  for (const lab of ['(inferred)', 'estimated', 'unverified', 'requested', 'planned', '(intended)', 'Inferred:']) {
+    const r = await $.tool.call(chk(`${LONGW}\nThe deploy is verified ${lab}.`, { evidence: '' })) as any
+    expect([lab, r.result]).toEqual([lab, expect.stringMatching(/^PASS /)])
+  }
+  expect(judge.calls.length).toBe(7)
+})
+test('0.6.19 source gate: matching by stem on any top-3 content word; checker probes', () => {
+  const E1 = 'validate passed \u2190 claude plugin validate 09:01'
+  expect(sourceGate('Zip rebuilt and validated; sha256 c7e61f4550976205fdd416a55edbc9cd190a586fd7f7a333b8d7c836d0cde917.', E1)).toEqual([])
+  expect(sourceGate('Fixed the counter yesterday.', 'counter-fix \u2190 Edit register.ts 10:02')).toEqual([])
+  expect(sourceGate('Fixed the counter yesterday.', 'nothing \u2190 Edit register.ts 10:02').length).toBe(1)
+  expect(sourceGate('Zip archive rebuilt. Validation passed. Counter fixed.', 'archive, validation, counter, sha256 \u2190 tools 09:01').length).toBe(3) // keyword list covering several claims does not count
+  expect(sourceGate('Counters updated.', 'counter updating \u2190 J\u2019s words')).toEqual([])
+  expect(sourceGate('Sentence merged on 2026-11-09 at 09:01.', 'unrelated \u2190 Bash 09:01').length).toBe(1) // dates and times are not content words
+})
+test('0.6.19 source gate: exempt sentences, lines and the state-word list', () => {
+  expect(sourceGate('You live in Singapore.', '')).toEqual([])
+  expect(sourceGate('The deploy is running slowly.', '')).toEqual([])
+  expect(sourceGate('The deploy is running plugin 0.6.19.', '').length).toBe(1)
+  for (const t of ['The deployment will be verified once the build is built.', 'Not yet deployed.', 'Never merged until review.', 'This is to be tested.']) expect([t, sourceGate(t, '')]).toEqual([t, []])
+  for (const h of ['Correction: the zip was rebuilt.', '**Prevention:** the check was added and tested.', 'Why you caught it: the counter was fixed.', 'Efficiency: the build was built twice.', '**Leap:** the plan was merged.', '**Next:** the zip is sent.', 'checked: the file was saved.']) expect([h, sourceGate(h, '')]).toEqual([h, []])
+  expect(sourceGate('Deploy is verified.\n```\nverified stuff here\n```', 'deploy verified \u2190 tool Bash 12:00')).toEqual([])
+  expect(sourceGate('Two options left. Next step is the review.', '')).toEqual([])
+})
+test('0.6.19 source gate: short replies skip it before the gate runs; light mode is unaffected', async ($, on) => {
+  const { judge } = deepEngine(on, { version: BUNDLED_VERSION + 1, checks: { 'deep-evidence': { numbers: { sourceGate: 2 } } } }) // minWords 60, claim words still judged
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.turn.start(turn('t1'))
+  expect(((await $.tool.call(chk('Two options left.', { evidence: '' }))) as any).result).toMatch(/^PASS /)
+  expect(judge.calls.length).toBe(0)
+  await $.turn.complete(end('t1', 'ok'))
+  await $.prompt.submit({ text: 'light mode' } as any)
+  await $.turn.start(turn('t2'))
+  const r = await $.tool.call(chk(`${LONGW}\nThe deploy is verified and tested.`, { evidence: '' })) as any
+  expect(r.result).toMatch(/^PASS /)
+  expect(judge.calls.length).toBe(0)
 })

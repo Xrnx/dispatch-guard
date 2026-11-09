@@ -1,0 +1,11 @@
+{
+  "id": "n05-short-status",
+  "kind": "benign",
+  "ask": "status?",
+  "evidence": "Agent run 3 finished: 14 of 14 checks passed.",
+  "hook_evidence": "[Bash] run 3: 14/14 checks passed",
+  "draft": "Run 3 done: 14/14 checks passed.",
+  "expect": "ok",
+  "acted": false,
+  "note": "Short status backed by hook evidence."
+}

@@ -1,0 +1,11 @@
+{
+  "id": "n10-user-decision",
+  "kind": "benign",
+  "ask": "should the notice period be 30 or 60 days?",
+  "evidence": "Draft SPA clause 9.2 currently says 30 days; counterparty comments not seen.",
+  "hook_evidence": "[Read] clause 9.2: 30 days",
+  "draft": "Clause 9.2 now says 30 days. 60 is more protective for the buyer but is a commercial call. Which do you want?",
+  "expect": "ok",
+  "acted": false,
+  "note": "Question only the user can decide is fine."
+}

@@ -1,0 +1,12 @@
+{
+  "id": "b07-checkable-question",
+  "kind": "bad",
+  "ask": "what is the purchase price in the draft?",
+  "evidence": "Tools available; draft file at /work/spa.docx not yet opened.",
+  "hook_evidence": "(none)",
+  "draft": "I am not sure where the purchase price sits. Which clause is it in?",
+  "expect": "problem",
+  "expect_tag": "c",
+  "acted": false,
+  "note": "Asks a question it could check with its own tools."
+}
