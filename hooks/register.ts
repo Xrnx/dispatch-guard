@@ -1229,7 +1229,7 @@ export const CHECK_TOOL = 'mcp__dispatch-guard__check_reply'
 export const SET_RULES_TOOL = 'mcp__dispatch-guard__set_rules'
 export const RULES_KEY = 'standingRules' // `standingRules:<session>` = the user's standing rules text, capped at RULES_MAX chars
 export const RULES_MAX = 12_000
-export const DEEP_LINE = `Deep mode: draft the reply, call ${CHECK_TOOL} with {text, ask, evidence} (ask = J's message this turn, verbatim; evidence = one line per claim: <claim> ← <source: tool + time, agent report + time, J's words, or inferred/estimate>) and fix every listed problem until it returns PASS <hash>, then write that exact text as your final reply: nothing before or after it. Write the draft only inside the check_reply call; no visible text before the final reply. A mid-turn message to J goes out with the SendUserMessage tool, only after check_reply passed that exact text.`
+export const DEEP_LINE = `Deep mode: draft the reply, call ${CHECK_TOOL} with {text, ask, evidence} (ask = J's message this turn, verbatim; evidence = one line per claim: <claim> ← <source: tool + time, agent report + time, J's words, or inferred/estimate>) and fix every listed problem until it returns PASS <hash>, then write that exact text as your final reply: nothing before or after it. Write the draft only inside the check_reply call; no visible text before the final reply. A mid-turn message to J goes out with the SendUserMessage tool, only after check_reply passed that exact text. Rule checks require: **Efficiency:** and **Leap:** lines on substantive replies; Correction with Prevention and "Why you caught it:"; every figure and done-claim in evidence or labelled inferred/estimate/requested; no unchecked absolutes, open questions or offers.`
 export const replyHash = (t: string): string => { const n = String(t ?? '').replace(/\s+/g, ' ').trim(); return `${fnv8(n)}${n.length.toString(36)}` }
 export const modeSwitchLine = (m: ReplyMode): string => m === 'deep'
   ? 'Mode switched to deep: replies are checked before J sees them (a few seconds slower).'
@@ -1506,22 +1506,22 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 // first_draft_pass = of those, prompts with no failed round (a short reply going out directly counts as a pass).
 // judge_ok = judge calls that answered (ok or fail); judge_unavailable = calls with no usable answer.
 export const STATS_KEY = 'deepStats'
-export const PLUGIN_VERSION = '0.6.21'
-type Stats = { date: string; prompts: number; firstPass: number; rounds: number; unchecked: number; jc: number; jok: number; jun: number; tin: number; tout: number; tcache: number; epoch?: string; eRounds: number; eFail: boolean; closed?: string }
-export type StatsRow = { source: 'deep-stats'; date: string; session: string; plugin_version: string; prompts_judged: number; first_draft_pass: number; unchecked: number; rounds_total: number; judge_calls: number; judge_ok: number; judge_unavailable: number; tokens_in: number; tokens_out: number; tokens_cache: number }
+export const PLUGIN_VERSION = '0.6.22'
+type Stats = { date: string; prompts: number; firstPass: number; rounds: number; unchecked: number; jc: number; jok: number; jun: number; tin: number; tout: number; tcache: number; epoch?: string; eRounds: number; eFail: boolean; closed?: string; fc: Record<string, number> }
+export type StatsRow = { source: 'deep-stats'; date: string; session: string; plugin_version: string; prompts_judged: number; first_draft_pass: number; unchecked: number; rounds_total: number; judge_calls: number; judge_ok: number; judge_unavailable: number; tokens_in: number; tokens_out: number; tokens_cache: number; fail_checks: Record<string, number> }
 const readStats = async ($: EngineInterface, sid: string, date: string): Promise<Stats> => {
   const v = await Promise.resolve().then(() => $.store.get(`${STATS_KEY}:${sid}`)).catch(() => undefined) as Partial<Stats> | undefined
   const fresh = v?.date === date
   const n = (x: unknown): number => (fresh ? Number(x) || 0 : 0)
-  return { date, prompts: n(v?.prompts), firstPass: n(v?.firstPass), rounds: n(v?.rounds), unchecked: n(v?.unchecked), jc: n(v?.jc), jok: n(v?.jok), jun: n(v?.jun), tin: n(v?.tin), tout: n(v?.tout), tcache: n(v?.tcache), epoch: v?.epoch, eRounds: Number(v?.eRounds) || 0, eFail: v?.eFail === true, closed: v?.closed }
+  return { date, prompts: n(v?.prompts), firstPass: n(v?.firstPass), rounds: n(v?.rounds), unchecked: n(v?.unchecked), jc: n(v?.jc), jok: n(v?.jok), jun: n(v?.jun), tin: n(v?.tin), tout: n(v?.tout), tcache: n(v?.tcache), epoch: v?.epoch, eRounds: Number(v?.eRounds) || 0, eFail: v?.eFail === true, closed: v?.closed, fc: fresh && v?.fc && typeof v.fc === 'object' ? Object.fromEntries(Object.entries(v.fc).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {} }
 }
-async function statsRound($: EngineInterface, epoch: string | number, failed: boolean): Promise<void> {
+async function statsRound($: EngineInterface, epoch: string | number, failed: boolean, ids: string[] = []): Promise<void> {
   const sid = String(await $.session.id()), date = sgtIso(await nowMs($)).slice(0, 10), st = await readStats($, sid, date), e = String(epoch)
   const same = st.epoch === e
-  await $.store.set(`${STATS_KEY}:${sid}`, { ...st, rounds: st.rounds + 1, epoch: e, eRounds: (same ? st.eRounds : 0) + 1, eFail: (same && st.eFail) || failed })
+  await $.store.set(`${STATS_KEY}:${sid}`, { ...st, rounds: st.rounds + 1, epoch: e, eRounds: (same ? st.eRounds : 0) + 1, eFail: (same && st.eFail) || failed, fc: failed ? ids.reduce((a, id) => ({ ...a, [id]: (a[id] ?? 0) + 1 }), { ...st.fc }) : st.fc })
 }
 export const statsRow = (sid: string, date: string, st: Stats): StatsRow => ({ source: 'deep-stats', date, session: sid, plugin_version: PLUGIN_VERSION, prompts_judged: st.prompts, first_draft_pass: st.firstPass, unchecked: st.unchecked, rounds_total: st.rounds,
-  judge_calls: st.jc, judge_ok: st.jok, judge_unavailable: st.jun, tokens_in: st.tin, tokens_out: st.tout, tokens_cache: st.tcache })
+  judge_calls: st.jc, judge_ok: st.jok, judge_unavailable: st.jun, tokens_in: st.tin, tokens_out: st.tout, tokens_cache: st.tcache, fail_checks: { ...st.fc } })
 // One judge call: running per-session/day totals (never re-summed from the shared judgeLog).
 export async function statsJudge($: EngineInterface, status: string, tk: { input: number; output: number; cache: number }): Promise<void> {
   const sid = String(await $.session.id()), date = sgtIso(await nowMs($)).slice(0, 10), st = await readStats($, sid, date)
@@ -1547,7 +1547,7 @@ export async function statsTurnEnd($: EngineInterface, epoch: string | number, r
   } catch { /* logging never affects a turn */ }
 }
 async function recordOutcome($: EngineInterface, epoch: string | number, probs: Problem[], kind: 'fail' | 'fixed' | 'cap', n: number): Promise<void> {
-  await statsRound($, epoch, kind === 'fail' || (kind === 'cap' && probs.length > 0)).catch(() => undefined)
+  await statsRound($, epoch, kind === 'fail' || (kind === 'cap' && probs.length > 0), [...new Set(probs.map(x => x.id))]).catch(() => undefined)
   const sid = String(await $.session.id()), now = await nowMs($), key = `${OPEN_KEY}:${sid}`
   const cur = await $.store.get(key) as { epoch?: unknown; rows?: { id: string; data: DeepRow }[] } | undefined
   const open = cur?.epoch === epoch && Array.isArray(cur.rows) ? cur.rows : []
@@ -1931,7 +1931,9 @@ export const register: Register = on => {
         }
       }
       const pre: Problem[] = sg.length > 0 ? [{ id: SOURCE_GATE_ID, text: `cite a source in evidence or label it (inferred / estimate / unverified / requested / planned): ${sg.slice(0, 3).join(' | ')}` }] : []
-      const jr = sg.length > 0 || skipJudge(text, f.asked || String(x.ask ?? '')) ? undefined : await judgeReply($, text, f.asked || String(x.ask ?? '').trim(), sentEvidence(String(x.evidence ?? '')), turnResults, f)
+      // 0.6.22: cheap rule checks run first; a draft that already fails one comes back at once, without the slower judge call.
+      const ruleFirst = !atCap && deepProblems(text, f).some(p => !DARK.has(p.id) && !DEEP_DARK.has(p.id))
+      const jr = sg.length > 0 || ruleFirst || skipJudge(text, f.asked || String(x.ask ?? '')) ? undefined : await judgeReply($, text, f.asked || String(x.ask ?? '').trim(), sentEvidence(String(x.evidence ?? '')), turnResults, f)
       const g = await deepGate($, text, f, denied, epoch, jr === undefined || jr.status === 'unavailable' ? undefined : { problems: jr.problems.map(t => ({ id: 'judge', text: `judge: ${t}` })) }, atCap && jr === undefined, pre, mc)
       denied = g.denied
       if (g.probs.length > 0 && !g.capped) return { result: `Deep mode: fix these, then call check_reply again (${g.denied}/${cap}): ${numbered(g.probs)}` }

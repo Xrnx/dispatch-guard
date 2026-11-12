@@ -2229,6 +2229,8 @@ test('judge: request carries haiku, cached rules, low effort, 400 tokens, 8s tim
   expect(DEEP_LINE).toMatch(/\{text, ask, evidence\}/)
   expect(DEEP_LINE).toMatch(/write that exact text as your final reply: nothing before or after it/)
   expect(DEEP_LINE).not.toMatch(/blank|one word/)
+  expect(DEEP_LINE).toMatch(/Rule checks require: \*\*Efficiency:\*\* and \*\*Leap:\*\*.*Why you caught it/)
+  expect(DEEP_LINE.split('Rule checks require:')[1].trim().split(/\s+/).length + 3).toBeLessThanOrEqual(45)
   expect(DEEP_LINE).toMatch(/Write the draft only inside the check_reply call; no visible text before the final reply/)
 })
 
@@ -2321,7 +2323,12 @@ test('judge: kept deterministic denies still fail alongside judge problems (Leap
   await $.turn.start(turn('t1'))
   const r = await $.tool.call(chk(ANALYSIS)) as any
   expect(r.result).toMatch(/Leap/)
-  expect(r.result).toMatch(/judge: "chain closed"/)
+  expect(r.result).toMatch(/Efficiency/)
+  expect(judge.calls.length).toBe(0) // 0.6.22: a rule failure comes back at once, the judge is not called
+  // a draft that passes the rule checks still gets judge problems
+  const r2 = await $.tool.call(chk(`${ANALYSIS}\n**Efficiency:** none\n**Leap:** none`)) as any
+  expect(judge.calls.length).toBe(1)
+  expect(r2.result).toMatch(/judge: "chain closed"/)
 })
 
 test('final reply: a text matching a PASS from this turn is not logged; an unchecked final text is logged final:"unchecked", never blocked', async ($, on) => {
@@ -2364,14 +2371,15 @@ test('check_reply: at the cap the count stays at the cap for the rest of the pro
   await $.prompt.submit({ text: 'first' } as any)
   await $.turn.start(turn('t1'))
   await $.tool.call(chk(BADC)); await $.tool.call(chk(BADC))
-  const calls = judge.calls.length
+  const calls = judge.calls.length // 0.6.22: rounds 1-2 fail a rule check, so the judge has not run yet
+  expect(calls).toBe(0)
   for (let i = 0; i < 3; i++) expect(((await $.tool.call(chk(BADC))) as any).result).toMatch(/^PASS \S+ \(note: 2 failed checks, open problems: Correction/)
   expect(judge.calls.length).toBe(calls + 3) // 0.6.17: the judge still runs at the cap (BADC holds a Correction word)
   await $.turn.complete(end('t1', 'ok'))
   await $.prompt.submit({ text: 'second' } as any)
   await $.turn.start(turn('t2'))
   expect(((await $.tool.call(chk(BADC))) as any).result).toMatch(/1\/2/)
-  expect(judge.calls.length).toBe(calls + 4)
+  expect(judge.calls.length).toBe(calls + 3) // 0.6.22: the new prompt's first failing round skips the judge (rule first)
 })
 
 test('epoch: bumped on every J prompt (time + random string), so an old count never taxes a new prompt', async ($, on) => {
@@ -2542,7 +2550,7 @@ test('0.6.17 cap 1: one failed check, then PASS with a note (no judge at the cap
   expect(((await $.tool.call(check(BADC))) as any).result).toMatch(/\(1\/1\)/)
   const second = await $.tool.call(check(BADC)) as any
   expect(second.result).toMatch(/^PASS \S+ \(note: 1 failed checks, open problems: /)
-  expect(judge.calls.length).toBe(2) // 0.6.17: the judge still runs at the cap
+  expect(judge.calls.length).toBe(1) // 0.6.17: the judge still runs at the cap; 0.6.22: round 1 (rule failure) skips it
 })
 test('0.6.17 deep-cap is a pack value (0-3): cap 0 never fails a draft, 4 is invalid', async ($, on) => {
   const pk = (cap: number) => ({ version: BUNDLED_VERSION + 1, checks: { 'deep-cap': { numbers: { cap } } } })
@@ -2988,7 +2996,7 @@ test('0.6.18 light mode: tool calls and turn ends make no evidence writes', asyn
 // 0.6.19 deep-stats: one upserted Scoreboard row per session per day
 const statRows = (mem: Record<string, unknown>) => ((mem.corrLog as any[]) ?? []).filter(r => r.data.source === 'deep-stats')
 const SHORT = 'Noted. Two options left.'
-test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft passes, 3 rounds; judge and token sums from judgeLog', async ($, on) => {
+test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft passes, 3 rounds; judge and token sums from judgeLog (0.6.22: only the clean round calls the judge)', async ($, on) => {
   const { mem, judge } = deepEngine(on, true)
   on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
   judge.reply = { isAnswered: true, text: '{"ok":true,"problems":[]}', usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 50 } }
@@ -3002,8 +3010,9 @@ test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft pas
   expect(rows.length).toBe(1)
   const d = rows[0].data
   expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
-  expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 3, judge_ok: 3, judge_unavailable: 0, tokens_in: 300, tokens_out: 60, tokens_cache: 150 })
-  expect(PLUGIN_VERSION).toBe('0.6.21')
+  expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 1, judge_ok: 1, judge_unavailable: 0, tokens_in: 100, tokens_out: 20, tokens_cache: 50 })
+  expect(Object.values(d.fail_checks).reduce((a: number, b: any) => a + b, 0)).toBeGreaterThanOrEqual(2) // 0.6.22: the two failed BADC rounds are counted by check id
+  expect(PLUGIN_VERSION).toBe('0.6.22')
 })
 test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
   const { mem } = deepEngine(on, true)
@@ -3043,9 +3052,9 @@ test('0.6.19 deep-stats: the row has only the listed count fields, no draft/prob
   await $.tool.call(chk(CLEAN))
   await $.turn.complete(end('t1', CLEAN))
   const d = statRows(mem)[0].data
-  expect(Object.keys(d).sort()).toEqual(['date', 'first_draft_pass', 'judge_calls', 'judge_ok', 'judge_unavailable', 'plugin_version', 'prompts_judged', 'rounds_total', 'session', 'source', 'tokens_cache', 'tokens_in', 'tokens_out', 'unchecked'])
+  expect(Object.keys(d).sort()).toEqual(['date', 'fail_checks', 'first_draft_pass', 'judge_calls', 'judge_ok', 'judge_unavailable', 'plugin_version', 'prompts_judged', 'rounds_total', 'session', 'source', 'tokens_cache', 'tokens_in', 'tokens_out', 'unchecked'])
   expect(JSON.stringify(statRows(mem))).not.toMatch(/SECRET|Correction|date was wrong/)
-  for (const v of Object.values(d)) expect(typeof v === 'string' ? v.length < 60 : typeof v === 'number').toBe(true)
+  for (const [k, v] of Object.entries(d)) expect(k === 'fail_checks' ? Object.values(v as object).every(c => typeof c === 'number') : typeof v === 'string' ? v.length < 60 : typeof v === 'number').toBe(true)
 })
 test('0.6.19 deep-stats: judge totals are running per-session counters (unavailable counted apart), not summed from the shared judgeLog', async ($, on) => {
   const { mem, judge, sidBox } = deepEngine(on, true)
@@ -3528,4 +3537,34 @@ test('0.6.21 judge auto-evidence: Agent launches (description + model), this tur
   expect(p).toContain('Auto-evidence:')
   for (const t of ['launched build the zip (model sonnet)', 'SendMessage: please also run the tests', 'old "OLDSTR" -> new "NEWSTR']) expect(p).toContain(t)
   expect(p).not.toContain('z'.repeat(301))
+})
+
+test('0.6.22 rule checks first: a draft failing a live rule check comes back without a judge call; a clean draft still reaches the judge', async ($, on) => {
+  const { judge } = deepEngine(on)
+  await $.turn.start(turn('t1'))
+  const r = await $.tool.call(chk(LONG)) as any
+  expect(String(r.result ?? r)).toMatch(/fix these/)
+  expect(judge.calls.length).toBe(0)
+  await $.tool.call(chk(CLEAN))
+  expect(judge.calls.length).toBe(1)
+})
+
+test('0.6.22 deep-stats fail_checks: per-check counts of failed rounds accumulate in the row; judge problems count under judge; a PASS round adds none', async ($, on) => {
+  const { mem, judge } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.prompt.submit({ text: 'first' } as any)
+  await $.turn.start(turn('t1'))
+  await $.tool.call(chk(ANALYSIS)) // rule failure: leap-line + efficiency-line
+  judge.reply = FAIL_J
+  await $.tool.call(chk(`${ANALYSIS}\n**Efficiency:** run the lock-wait check before drafting.\n**Leap:** none`)) // judge problem
+  judge.reply = { isAnswered: true, text: '{"ok":true,"problems":[]}', usage: {} }
+  await $.tool.call(chk(CLEAN))
+  await $.turn.complete(end('t1', CLEAN))
+  expect(statRows(mem)[0].data.fail_checks).toEqual({ 'leap-line': 1, 'efficiency-line': 1, judge: 1 })
+  await $.prompt.submit({ text: 'second' } as any)
+  await $.turn.start(turn('t2'))
+  await $.tool.call(chk(ANALYSIS))
+  await $.tool.call(chk(CLEAN))
+  await $.turn.complete(end('t2', CLEAN))
+  expect(statRows(mem)[0].data.fail_checks).toEqual({ 'leap-line': 2, 'efficiency-line': 2, judge: 1 })
 })
