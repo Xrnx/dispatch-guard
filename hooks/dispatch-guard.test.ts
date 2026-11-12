@@ -1996,7 +1996,7 @@ const deepEngine = (on: any, legacy: boolean | object = true) => {
   on('session.id', () => ({ value: sidBox.v }))
   on('turn.start', (_$: any, e: any) => ({ turnId: e.turnId }))
   const calls: any[] = [] // 0.6.20: tool calls that reached the engine beneath (not denied, not answered by the plugin)
-  on('tool.call', (_$: any, e: any) => { calls.push(e); return { result: {}, text: (judge as any).toolText ?? '' } })
+  on('tool.call', (_$: any, e: any) => { calls.push(e); return { result: {}, text: (judge as any).toolText ?? '', ...((judge as any).toolError === true ? { isError: true } : {}) } })
   on('prompt.submit', (_$: any, e: any) => { seen.push((e.context ?? []).join('\n')); return { text: e.text, context: e.context } })
   return { mem, seen, judge, sidBox, calls }
 }
@@ -3495,8 +3495,8 @@ test('0.6.21 judge evidence: SendUserMessage texts sent earlier in the turn reac
   expect(p).toContain(`Already sent to J this turn: ${CLEAN}`)
 })
 
-test('0.6.21 efficiency-fix ships DARK: detector matches; turn end adds no parked-fix line while efficiency-fix is in DARK', async ($, on) => {
-  expect(DARK.has('efficiency-fix')).toBe(true)
+test('0.6.22 efficiency-fix is live: detector matches; turn end adds the parked-fix line (Fix named but not started) once, none for Efficiency: none', async ($, on) => {
+  expect(DARK.has('efficiency-fix')).toBe(false)
   expect(efficiencyFix('Result: ok\n**Efficiency:** I could have cached the lookup.', false)).toBe(true)
   expect(efficiencyFix('Efficiency: should batch the two reads next time', false)).toBe(true)
   expect(efficiencyFix('Efficiency: none', false)).toBe(false)
@@ -3507,7 +3507,7 @@ test('0.6.21 efficiency-fix ships DARK: detector matches; turn end adds no parke
   on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
   await $.turn.start(turn('t1'))
   const r = await $.turn.complete(end('t1', 'Result: ok.\nEfficiency: I could have cached the lookup.')) as any
-  expect(r.text ?? '').not.toContain('Fix named but not started')
+  expect(r.text ?? '').toContain('Fix named but not started')
   await $.turn.start(turn('t2'))
   const q = await $.turn.complete(end('t2', 'Result: ok.\nEfficiency: none')) as any
   expect(q.text).not.toContain('Fix named but not started')
@@ -3567,4 +3567,27 @@ test('0.6.22 deep-stats fail_checks: per-check counts of failed rounds accumulat
   await $.tool.call(chk(CLEAN))
   await $.turn.complete(end('t2', CLEAN))
   expect(statRows(mem)[0].data.fail_checks).toEqual({ 'leap-line': 2, 'efficiency-line': 2, judge: 1 })
+})
+
+test('0.6.22 generic auto-evidence: every non-read-only tool call this turn (name, input, ok/errored, result start) reaches the judge; read-only tools, check_reply and SendUserMessage do not', async ($, on) => {
+  const { judge } = deepEngine(on)
+  await $.prompt.submit({ text: 'status please' } as any)
+  await $.turn.start(turn('t1'))
+  ;(judge as any).toolText = 'denied by policy xyz'; (judge as any).toolError = true
+  await $.tool.call({ tool: 'mcp__x__update_trigger', id: 'trg_1', cron: '0 9 * * *' } as any)
+  ;(judge as any).toolText = 'trigger updated TRIGOK'; (judge as any).toolError = false
+  await $.tool.call({ tool: 'mcp__x__update_trigger', id: 'trg_1', cron: '0 9 * * *' } as any)
+  ;(judge as any).toolText = 'READONLYRESULT'
+  await $.tool.call({ tool: 'Read', file_path: '/etc/hostname' } as any)
+  await $.tool.call({ tool: 'mcp__memory__memory_read', path: '/x.md' } as any)
+  ;(judge as any).toolText = `BIG${'q'.repeat(500)}`
+  await $.tool.call({ tool: 'Bash', command: 'make build' } as any)
+  await $.tool.call(chk(CLEAN, { evidence: 'EV' }))
+  const p = String(judge.calls[0].prompt).split('Auto-evidence:')[1].split('</evidence>')[0]
+  expect(p).toMatch(/update_trigger \{[^}]*"id":"trg_1"[^}]*\} -> errored: denied by policy xyz/)
+  expect(p).toMatch(/update_trigger \{[^}]*\} -> ok: trigger updated TRIGOK/)
+  expect(p).toMatch(/Bash \{"command":"make build"\} -> ok: BIGq/)
+  expect(p).not.toContain('q'.repeat(201))
+  expect(p).not.toMatch(/Read \{|memory_read \{|check_reply \{|SendUserMessage \{/)
+  expect(p).not.toContain('tool_use_id')
 })

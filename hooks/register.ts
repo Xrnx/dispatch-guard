@@ -18,7 +18,7 @@ const msg = (id: string, k = 'line', vars?: Record<string, string | number>): st
 export const OFF: ReadonlySet<string> = new Set(['style', 'verify-proof', 'leap-line', 'arith-proof', 'lookup-first', 'parked-fix', 'board-dispatch', 'done-claim', 'source-addendum'])
 export const live = (id: string): boolean => !OFF.has(id)
 // 0.6.14 dark checks: computed and logged to the Scoreboard (hookLog) but never shown to the model or J. Promote by removing the id here.
-export const DARK: ReadonlySet<string> = new Set(['stop-figures', 'stop-sources', 'stop-writes', 'promise-proof', 'source-gate', 'efficiency-fix']) // 0.6.19: source-gate is log-only until deep-evidence.sourceGate is 2
+export const DARK: ReadonlySet<string> = new Set(['stop-figures', 'stop-sources', 'stop-writes', 'promise-proof', 'source-gate']) // 0.6.19: source-gate is log-only until deep-evidence.sourceGate is 2
 
 const EXEMPT = new Set(['Agent', 'SendMessage', 'TaskCreate', 'TaskUpdate', 'Read', 'Glob', 'Grep', 'ToolSearch', 'TaskGet', 'TaskList'])
 const SAVE_TOOL = /(^|__)memory_(write|str_replace|append)$|(^|__)propose_skills$/ // 0.6.21 save-gate: the rule-saving tools
@@ -1506,6 +1506,8 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 // first_draft_pass = of those, prompts with no failed round (a short reply going out directly counts as a pass).
 // judge_ok = judge calls that answered (ok or fail); judge_unavailable = calls with no usable answer.
 export const STATS_KEY = 'deepStats'
+// 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
+export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
 export const PLUGIN_VERSION = '0.6.22'
 type Stats = { date: string; prompts: number; firstPass: number; rounds: number; unchecked: number; jc: number; jok: number; jun: number; tin: number; tout: number; tcache: number; epoch?: string; eRounds: number; eFail: boolean; closed?: string; fc: Record<string, number> }
 export type StatsRow = { source: 'deep-stats'; date: string; session: string; plugin_version: string; prompts_judged: number; first_draft_pass: number; unchecked: number; rounds_total: number; judge_calls: number; judge_ok: number; judge_unavailable: number; tokens_in: number; tokens_out: number; tokens_cache: number; fail_checks: Record<string, number> }
@@ -1684,6 +1686,7 @@ export const register: Register = on => {
   let turnInputs = '' // tool inputs this main turn
   let corpus = '' // earlier turns' corpus (assistant text excluded), capped
   let agentLaunches: string[] = [] // 0.6.21 auto-evidence: this chat's Agent launches (description + model)
+  let turnActs: string[] = [] // 0.6.22: every non-read-only tool call this turn: name + input + ok/error + result start
   let turnSends: string[] = [] // ... this turn's SendMessage texts and memory write strings
   let sentText: string[] = [] // SendUserMessage texts this main turn (J-facing too)
   // 0.6.8 per session id: whether artifacts were listed / reuse-first fired.
@@ -1717,7 +1720,7 @@ export const register: Register = on => {
   const capNote = (probs: Problem[], c = denyCap()): string => `Deep mode: sent after ${c} failed checks with open problems (${probs.map(x => x.text).join('; ')}).`
   // 0.6.21: the judge also sees what SendUserMessage already told J this turn, so a final reply is not failed for 'not answering' a question a mid-turn message answered.
   const sentEvidence = (ev: string): string => {
-    const auto = [...agentLaunches.slice(-15).map(a => `launched ${a}`), ...turnSends.slice(-15)]
+    const auto = [...agentLaunches.slice(-15).map(a => `launched ${a}`), ...turnSends.slice(-15), ...turnActs.slice(-30)]
     return `${ev}${sentText.length === 0 ? '' : `\nAlready sent to J this turn: ${sentText.join('\n---\n')}`}${auto.length === 0 ? '' : `\nAuto-evidence: ${auto.join('; ')}`}`.slice(-20_000)
   }
   const numbered = (probs: Problem[]): string => probs.map((x, i) => `${i + 1}) ${x.text}`).join(' ')
@@ -1873,6 +1876,7 @@ export const register: Register = on => {
       turnResults = ''
       sentText = []
       turnSends = []
+      turnActs = []
       finalPassed.clear()
       savePass = false
       hadLeap = false
@@ -2087,6 +2091,12 @@ export const register: Register = on => {
     if (e.agentId === undefined) { const cn = await takeCompactNote($); if (cn !== undefined) notes.push(cn) }
     const startedAt = timed ? await nowMs($) : 0
     const ran = await next(e)
+    if (e.agentId === undefined && !READ_ONLY_TOOL.test(e.tool) && e.tool !== CHECK_TOOL && e.tool !== 'SendUserMessage') { // 0.6.22 generic auto-evidence (a denied or errored call counts: a later retry that succeeded is visible)
+      const { tool: _t, agentId: _a, tool_use_id: _u, ...inp } = e as Record<string, unknown>
+      const rs = String(ran.deny !== undefined ? ran.deny : ran.text ?? (typeof ran.result === 'string' ? ran.result : JSON.stringify(ran.result ?? ''))).replace(/\s+/g, ' ').trim().slice(0, 200)
+      turnActs.push(`${e.tool.replace(/^.*__/, '')} ${JSON.stringify(inp).slice(0, 200)} -> ${ran.deny !== undefined ? 'denied' : ran.isError ? 'errored' : 'ok'}: ${rs}`)
+      if (turnActs.length > 60) turnActs.shift()
+    }
     if (timed) {
       const took = (await nowMs($) - startedAt) / 1000
       if (took >= num('long-bash', 'maxSeconds')) notes.push(msg('long-bash', 'took', { n: Math.round(took) }))
@@ -2180,7 +2190,7 @@ export const register: Register = on => {
     // miss-landing wins over parked-fix: a turn gets at most one of the two lines.
     if (!skipDeep && missUnlanded(e.answer, proof || landed)) line = msg('miss-landing')
     else if (line === undefined && !skipDeep && live('parked-fix') && parkedFix(e.answer, proof || acted)) line = msg('parked-fix')
-    else if (line === undefined && !skipDeep && !DARK.has('efficiency-fix') && efficiencyFix(e.answer, proof || acted || landed || wrote)) line = msg('parked-fix')
+    else if (line === undefined && !skipDeep && efficiencyFix(e.answer, proof || acted || landed || wrote)) line = msg('parked-fix')
     let continued = false
     if (line === msg('idle-guard')) {
       idleFired = true
