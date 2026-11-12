@@ -1,5 +1,5 @@
 {
-  "version": 15,
+  "version": 16,
   "checks": {
     "running-proof": {
       "patterns": {
@@ -598,6 +598,15 @@
         "flags": "i"
       },
       "message": "paste-ready: the reply tells J to pass something on but gives no text to pass — add the exact message in a fenced block or > quote."
+    },
+    {
+      "id": "closure-status",
+      "on": "answer",
+      "pattern": {
+        "source": "^(?![^\\n]*\\b(?:done|added to|covered by|needs you|needs J|none|live|step \\d|logged|inferred|no change|nothing to change|not saved|not a fix|now)\\b)(?![^\\n]*\\b(?:haven|didn|can)['’]t\\b)[ \\t>]*(?:[-*+•][ \\t]+)?\\*\\*(?:(?:Efficiency|Prevention):?\\*\\*:?[^\\n]*\\b(?:making|adding|will|should(?! have)|would|add|change|fix)\\b|Correction:?\\*\\*:?(?=[^\\n]*\\b(?:I|my)\\b)[^\\n]*\\b(?:making|adding|will|should(?! have)|add|change|fix)\\b)",
+        "flags": "mi"
+      },
+      "message": "closure-status: this Efficiency/Prevention/Correction line names a change without its status. End it with: done + where, covered by <item>, needs J, or none."
     }
   ]
 }
