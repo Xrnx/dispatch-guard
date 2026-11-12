@@ -28,6 +28,10 @@ const exempt = (tool: string): boolean => EXEMPT.has(tool) || MEMORY_READ.test(t
 // mid-turn J prompt this hook sees (store key MID_SEEN) switches the fallback off for good, leaving the event trigger.
 const LIMIT = 3
 const MID_SEEN = 'midTurnSeen'
+// 0.6.20 burst-safe mid-turn: the tools a pending J message leaves open (the reply, delegation, loading their schemas, the pre-send check).
+export const MID_OPEN: ReadonlySet<string> = new Set(['SendUserMessage', 'Agent', 'Task', 'SendMessage', 'ToolSearch', 'mcp__dispatch-guard__check_reply', 'mcp__dispatch-guard__set_rules'])
+export type MidMsg = { text: string; at: number; seq: number; gap: number }
+export const midList = (q: MidMsg[]): string => q.map((m, i) => `(${i + 1}) "${m.text.replace(/\s+/g, ' ').trim().slice(0, 140)}${m.text.length > 140 ? '…' : ''}"`).join(' ')
 // A single finishing write (save/publish/send) is not worth an agent hop: never the trigger for the reminder (it still counts).
 const MEMORY_WRITE = /(^|__)memory_(write|str_replace|append)$/
 const READ_ACTIONS = new Set(['get', 'list', 'query', 'read'])
@@ -1492,7 +1496,7 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 // first_draft_pass = of those, prompts with no failed round (a short reply going out directly counts as a pass).
 // judge_ok = judge calls that answered (ok or fail); judge_unavailable = calls with no usable answer.
 export const STATS_KEY = 'deepStats'
-export const PLUGIN_VERSION = '0.6.19'
+export const PLUGIN_VERSION = '0.6.20'
 type Stats = { date: string; prompts: number; firstPass: number; rounds: number; unchecked: number; jc: number; jok: number; jun: number; tin: number; tout: number; tcache: number; epoch?: string; eRounds: number; eFail: boolean; closed?: string }
 export type StatsRow = { source: 'deep-stats'; date: string; session: string; plugin_version: string; prompts_judged: number; first_draft_pass: number; unchecked: number; rounds_total: number; judge_calls: number; judge_ok: number; judge_unavailable: number; tokens_in: number; tokens_out: number; tokens_cache: number }
 const readStats = async ($: EngineInterface, sid: string, date: string): Promise<Stats> => {
@@ -1550,7 +1554,9 @@ async function recordOutcome($: EngineInterface, epoch: string | number, probs: 
   await $.store.set(key, { epoch, rows: [] })
 }
 // Deep-mode checks on one draft: dark hits logged (dark:true); live problems count against the per-draft cap (store-mirrored) and log.
-export async function deepGate($: EngineInterface, said: string, facts: DeepFacts, deniedSoFar: number, epoch: string | number = 0, judged?: { problems: Problem[] }, hold = false, pre: Problem[] = []): Promise<{ probs: Problem[]; denied: number; capped: boolean }> {
+export async function deepGate($: EngineInterface, said: string, facts: DeepFacts, deniedSoFar: number, epoch: string | number = 0, judged?: { problems: Problem[] }, hold = false, pre: Problem[] = [], maxCap?: number): Promise<{ probs: Problem[]; denied: number; capped: boolean }> {
+  // 0.6.20: maxCap (a reply to a mid-turn J message) lowers the cap and drops the extra (a)/(b) round.
+  const cap = maxCap === undefined ? denyCap() : Math.min(maxCap, denyCap())
   const all = deepProblems(said, facts)
   // DARK checks are unvalidated: logged as would-be hits ({dark:true}), never denying. With a judge answer, DEEP_DARK ids are dark too; judge problems deny.
   const dark = (id: string): boolean => DARK.has(id) || (judged !== undefined && DEEP_DARK.has(id))
@@ -1558,7 +1564,7 @@ export async function deepGate($: EngineInterface, said: string, facts: DeepFact
   const claimKey = `deepClaim:${await Promise.resolve().then(() => $.session.id()).catch(() => '?')}`
   const claimRound = String(await Promise.resolve().then(() => $.store.get(claimKey)).catch(() => '') ?? '') === String(epoch) // an earlier judged (a)/(b) round failed in this prompt: effective cap is one higher
   // 0.6.17: after a failed round in this prompt, "Efficiency: none" is not accepted. It counts (denies) only when the effective cap is at least 2; else it goes into the note.
-  const effOk = denyCap() >= 2 || (denyCap() === 1 && claimRound)
+  const effOk = cap >= 2 || (cap === 1 && claimRound)
   const effNone: Problem[] = before > 0 && /^[\s>*_-]*(?:\*\*|__)?Efficiency:(?:\*\*|__)?\s*none\b/im.test(said) ? [{ id: 'efficiency-none', weak: !effOk, text: `Efficiency: none after ${before} failed check round${before === 1 ? '' : 's'} — say what would have made this reply reach J sooner (e.g. fuller evidence first time)` }] : []
   const probs = [...all.filter(x => !dark(x.id)), ...effNone, ...pre, ...(judged?.problems ?? [])]
   const soft = all.filter(x => dark(x.id))
@@ -1570,8 +1576,8 @@ export async function deepGate($: EngineInterface, said: string, facts: DeepFact
   // 0.6.17 caps: any hard problem fails up to denyCap(); a judge problem tagged (a) contradicted / (b) unsupported claim, or Efficiency-none after such a round, gets one more round.
   const hard = probs.filter(x => x.weak !== true)
   const claim = probs.filter(x => x.id === 'judge' && /^judge:\s*\(?[ab](?:\|[ab])?\)/i.test(x.text))
-  const extra = denyCap() > 0 && before < denyCap() + 1 && (claim.length > 0 || (claimRound && denyCap() === 1 && effNone.length > 0 && !effNone[0].weak))
-  if (hard.length > 0 && (before < denyCap() || extra)) {
+  const extra = maxCap === undefined && cap > 0 && before < cap + 1 && (claim.length > 0 || (claimRound && cap === 1 && effNone.length > 0 && !effNone[0].weak))
+  if (hard.length > 0 && (before < cap || extra)) {
     const n = before + 1
     if (claim.length > 0) await Promise.resolve().then(() => $.store.set(claimKey, String(epoch))).catch(() => undefined)
     await Promise.resolve().then(() => $.store.set(key, `${epoch}:${n}`)).catch(() => undefined)
@@ -1653,6 +1659,15 @@ export const register: Register = on => {
   let midPending = false // a J message arrived mid-turn and no SendUserMessage has gone out since
   let midFired = false // the mid-turn line went out for the pending message
   let midSeen = false // a mid-turn J prompt has reached this hook (store MID_SEEN): the 4th-call fallback is off
+  // 0.6.20 burst-safe mid-turn state (main thread). seq <= seenSeq: the model saw the message (it arrived before its last tool result came back).
+  let midQ: MidMsg[] = [] // unanswered mid-turn J messages, oldest first
+  let midSeq = 0
+  let seenSeq = 0
+  let lastJAt = 0 // when J's previous message (opening or mid-turn) arrived
+  let midDenied = 0 // block denials for the pending set (valve)
+  let foldFired = false // the burst fold-in deny went out for the reply in progress
+  let sendable = true // the session's tool list has SendUserMessage (unreadable list: assumed)
+  const midCap = (): number | undefined => (midQ.length > 0 ? num('mid-turn', 'rounds') : undefined)
   let scripted = false // a code-running tool ran on the main thread this turn
   let seenNums = new Set<string>() // numbers in this turn's opening text, tool inputs and tool results
   let turnCorpus = '' // 0.6.14: this turn's opening text (J, hand-back or notification) + tool inputs + results
@@ -1686,7 +1701,7 @@ export const register: Register = on => {
   const finalPassed = new Set<string>() // hashes check_reply passed this turn: the final reply should be one of them
   const passed = new Map<string, string>() // 0.6.16: hashes of drafts check_reply passed -> note (sent-with-open-problems), consumed by the matching SendUserMessage
   const facts = (): DeepFacts => ({ asked, corpus: `${corpus} ${turnCorpus}`, looked, anyTool, jTurn, acted: acted || landed || wrote, landed, saved: savedWide, askTool, wrote, hadLeap, hadEff })
-  const capNote = (probs: Problem[]): string => `Deep mode: sent after ${denyCap()} failed checks with open problems (${probs.map(x => x.text).join('; ')}).`
+  const capNote = (probs: Problem[], c = denyCap()): string => `Deep mode: sent after ${c} failed checks with open problems (${probs.map(x => x.text).join('; ')}).`
   const numbered = (probs: Problem[]): string => probs.map((x, i) => `${i + 1}) ${x.text}`).join(' ')
 
   // 0.6.16: the pre-send check as a tool, so a bad draft never reaches a message row J can see.
@@ -1715,6 +1730,7 @@ export const register: Register = on => {
     // 0.6.15 reply modes: a "deep mode" / "light mode" command is stored; deep (the default) drafts via check_reply, then writes the passed text as the final reply.
     if (!e.isMeta && jOrigin(e as never) && isJ(e.text) && !(e.turnId !== undefined || inTurn)) {
       newEpoch()
+      lastJAt = await nowMs($)
       const cmd = modeCommand(e.text)
       if (cmd !== undefined) {
         mode = cmd
@@ -1738,6 +1754,14 @@ export const register: Register = on => {
     if ((e.turnId !== undefined || inTurn) && jOrigin(e as never) && isJ(e.text)) {
       midPending = true
       midFired = false
+      // 0.6.20: queue it; the block (tool.call) holds every other tool until a SendUserMessage answers the queue.
+      const at = await nowMs($)
+      midQ.push({ text: jText(e.text), at, seq: ++midSeq, gap: lastJAt > 0 ? at - lastJAt : Infinity })
+      lastJAt = at
+      if (midQ.length > 50) midQ = midQ.slice(-50)
+      let list: unknown
+      try { list = await $.tool.list() } catch { list = undefined }
+      sendable = !Array.isArray(list) || list.length === 0 || list.some(t => t?.name === 'SendUserMessage')
       if (e.turnId !== undefined && !midSeen) { midSeen = true; await Promise.resolve().then(() => $.store.set(MID_SEEN, true)).catch(() => undefined) }
     }
     if (rx('upload-check', 'uploaded').test(jText(e.text))) e = { ...e, context: [...(e.context ?? []), `${await syncedVersions($).catch(() => 'synced: unreadable')}; ${packInfo()}`] }
@@ -1819,6 +1843,10 @@ export const register: Register = on => {
       firstFired = false
       midPending = false
       midFired = false
+      midQ = []
+      seenSeq = midSeq
+      midDenied = 0
+      foldFired = false
       scripted = false
       seenNums = new Set(numbersIn(e.text))
       corpus = `${corpus} ${turnCorpus}`.slice(-600_000)
@@ -1852,6 +1880,8 @@ export const register: Register = on => {
 
   // Warn only: always run the tool, then append a reminder to its result.
   on('tool.call', async ($, e, next) => {
+    // 0.6.20: whatever this call returns, every mid-turn message queued so far reaches the model with its result: mark it seen.
+    try {
     if (e.tool === SET_RULES_TOOL) {
       const t = String((e as Record<string, unknown>).text ?? '').slice(0, RULES_MAX)
       if (e.agentId !== undefined || t.trim() === '') return { result: 'set_rules: nothing stored (empty text or a subagent call).' }
@@ -1867,8 +1897,10 @@ export const register: Register = on => {
       if (text.trim() === '') return { result: 'Deep mode: text is empty; pass the full draft reply as text.' }
       if (!sendOk || (await readMode($, mode)) !== 'deep') return { result: `PASS ${replyHash(text)}` }
       const x = e as Record<string, unknown>
-      const f = facts()
-      const atCap = await failCount($, denied, epoch) >= denyCap() // at the cap the draft passes with a note: no judge call
+      const mc = midCap() // 0.6.20: a reply to a pending mid-turn message gets mid-turn.rounds failed rounds, no extra round
+      const cap = mc === undefined ? denyCap() : Math.min(mc, denyCap())
+      const f = mc === undefined ? facts() : { ...facts(), asked: midQ.map(m => m.text).join('\n') } // the judge reads the pending burst as the ask
+      const atCap = await failCount($, denied, epoch) >= cap // at the cap the draft passes with a note: no judge call
       let sg: string[] = []
       const gateMode = num('deep-evidence', 'sourceGate') // 0 off, 1 log-only (DARK), 2 live
       if (gateMode > 0 && !skipJudge(text, f.asked || String(x.ask ?? ''))) { // the short-reply exemption runs first
@@ -1880,14 +1912,15 @@ export const register: Register = on => {
       }
       const pre: Problem[] = sg.length > 0 ? [{ id: SOURCE_GATE_ID, text: `cite a source in evidence or label it (inferred / estimate / unverified / requested / planned): ${sg.slice(0, 3).join(' | ')}` }] : []
       const jr = sg.length > 0 || skipJudge(text, f.asked || String(x.ask ?? '')) ? undefined : await judgeReply($, text, f.asked || String(x.ask ?? '').trim(), String(x.evidence ?? ''), turnResults, f)
-      const g = await deepGate($, text, f, denied, epoch, jr === undefined || jr.status === 'unavailable' ? undefined : { problems: jr.problems.map(t => ({ id: 'judge', text: `judge: ${t}` })) }, atCap && jr === undefined, pre)
+      const g = await deepGate($, text, f, denied, epoch, jr === undefined || jr.status === 'unavailable' ? undefined : { problems: jr.problems.map(t => ({ id: 'judge', text: `judge: ${t}` })) }, atCap && jr === undefined, pre, mc)
       denied = g.denied
-      if (g.probs.length > 0 && !g.capped) return { result: `Deep mode: fix these, then call check_reply again (${g.denied}/${denyCap()}): ${numbered(g.probs)}` }
-      const holdNote = atCap && jr === undefined && !g.capped ? `Deep mode: sent at the ${denyCap()}-failure cap; the judge was skipped for this draft.` : ''
-      passed.set(replyHash(text), g.capped ? capNote(g.probs) : holdNote)
+      if (g.probs.length > 0 && !g.capped) return { result: `Deep mode: fix these, then call check_reply again (${g.denied}/${cap}): ${numbered(g.probs)}` }
+      const holdNote = atCap && jr === undefined && !g.capped ? `Deep mode: sent at the ${cap}-failure cap; the judge was skipped for this draft.` : ''
+      passed.set(replyHash(text), g.capped ? capNote(g.probs, cap) : holdNote)
       finalPassed.add(replyHash(text))
       if (passed.size > 50) passed.delete(passed.keys().next().value!)
-      return { result: `PASS ${replyHash(text)}${holdNote !== '' ? ` (note: ${denyCap()} failed checks this prompt, judge skipped at the cap)` : ''}${g.capped ? ` (note: ${denyCap()} failed checks, open problems: ${g.probs.map(x => x.text).join('; ')})` : ''}` }
+      const midTag = mc === undefined || !g.capped ? '' : ' (mid-turn reply: one check round only; tag these open problems in the reply, then send it)'
+      return { result: `PASS ${replyHash(text)}${holdNote !== '' ? ` (note: ${cap} failed checks this prompt, judge skipped at the cap)` : ''}${g.capped ? ` (note: ${cap} failed checks, open problems: ${g.probs.map(x => x.text).join('; ')})${midTag}` : ''}` }
     }
     const packMsg = await ensurePack($, budgetMs(next)).catch(() => undefined)
     let waitNote: string | undefined
@@ -1922,6 +1955,16 @@ export const register: Register = on => {
       if (looped && !lp.fired) { lp.fired = true; add.push(LOOP_MSG) }
       return add.length > 0 ? { ...r, context: [...(r.context ?? []), ...add] } : r
     }
+    // 0.6.20 burst-safe: an unanswered mid-turn J message blocks every other main-thread tool until a SendUserMessage answers it.
+    if (midQ.length > 0 && sendable && !MID_OPEN.has(e.tool)) {
+      midDenied += 1
+      if (midDenied <= num('mid-turn', 'valve')) return { deny: msg('mid-turn', 'block', { n: midQ.length, list: midList(midQ) }) }
+    }
+    // 0.6.20 burst fold-in: J added messages within burstSeconds that the model had not seen when it chose to send: one deny per reply, so one reply covers them.
+    if (e.tool === 'SendUserMessage' && !foldFired && sendable) {
+      const late = midQ.filter(m => m.seq > seenSeq && m.gap <= num('mid-turn', 'burstSeconds') * 1000)
+      if (late.length > 0) { foldFired = true; return { deny: msg('mid-turn', 'fold', { n: late.length, secs: num('mid-turn', 'burstSeconds'), list: midList(late) }) } }
+    }
     const notes: string[] = []
     if (packMsg !== undefined) notes.push(packMsg)
     if (waitNote !== undefined) notes.push(waitNote)
@@ -1941,10 +1984,11 @@ export const register: Register = on => {
           passed.delete(h)
           if (pass !== '') notes.push(pass)
         } else {
-          const g = await deepGate($, said, facts(), denied, epoch)
+          const mc = midCap() // 0.6.20: a reply to a pending mid-turn message: mid-turn.rounds, no extra round
+          const g = await deepGate($, said, facts(), denied, epoch, undefined, false, [], mc)
           denied = g.denied
-          if (g.probs.length > 0 && !g.capped) return { deny: `Deep mode: call check_reply first. Fix these before J sees the reply (${g.denied}/${denyCap()}), check with check_reply, then resend with SendUserMessage: ${numbered(g.probs)}` }
-          if (g.capped) notes.push(capNote(g.probs))
+          if (g.probs.length > 0 && !g.capped) return { deny: `Deep mode: call check_reply first. Fix these before J sees the reply (${g.denied}/${mc === undefined ? denyCap() : Math.min(mc, denyCap())}), check with check_reply, then resend with SendUserMessage: ${numbered(g.probs)}` }
+          if (g.capped) notes.push(capNote(g.probs, mc === undefined ? denyCap() : Math.min(mc, denyCap())))
         }
         markLines(said)
       }
@@ -1974,7 +2018,13 @@ export const register: Register = on => {
     }
     if (startsWork(e as unknown as Record<string, unknown>)) work += 1
     // 0.6.0: event triggers in place of the 8-call silence count and the 4th-call count.
-    if (e.tool === 'SendUserMessage') { replied = true; midPending = false }
+    if (e.tool === 'SendUserMessage') {
+      replied = true
+      midQ = sendable ? midQ.filter(m => m.seq > seenSeq) : [] // answered: every message the model had seen; a later one stays pending (nudge-only sessions: all, as before)
+      midPending = midQ.length > 0
+      midDenied = 0
+      foldFired = false
+    }
     else if (!handoffTurn && !exempt(e.tool) && !finishing(e as Record<string, unknown>)) {
       if (midPending && !midFired) { midFired = true; notes.push(msg('mid-turn')) }
       else if (jTurn && !replied && !firstFired && startsWork(e as unknown as Record<string, unknown>)) { firstFired = true; notes.push(msg('first-reply')) }
@@ -2046,6 +2096,7 @@ export const register: Register = on => {
     if (big > 0) notes.push(BIG_MSG(big))
     if (notes.length === 0 || ran.deny !== undefined) return ran
     return { ...ran, context: [...(ran.context ?? []), ...notes] }
+    } finally { if (e.agentId === undefined) seenSeq = midSeq }
   }).catch(async ($, e, next) => {
     if (e.tool === CHECK_TOOL) {
       await Promise.resolve().then(async () => {

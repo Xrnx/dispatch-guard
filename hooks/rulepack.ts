@@ -28,6 +28,7 @@ export const RANGES: Record<string, Record<string, [number, number]>> = {
   'deep-leap': { minWords: [20, 1000], minBullets: [1, 50] },
   'deep-cap': { cap: [0, 3] }, // 0.6.17: failed checks per draft before PASS with a note
   'deep-judge': { minWords: [0, 500] }, // 0.6.17: replies shorter than this skip the judge (unless the claim pattern matches)
+  'mid-turn': { burstSeconds: [0, 60], rounds: [0, 3], valve: [1, 50] }, // 0.6.20: burst window, failed check rounds for a mid-turn reply, block valve
   'deep-evidence': { sessionChars: [0, 40000], judgeChars: [0, 20000], factsChars: [0, 2000], sourceGate: [0, 2] }, // 0.6.18: rolling per-session evidence store size; share shown to the judge
 }
 
@@ -318,7 +319,18 @@ export const BUNDLED: Record<string, CheckDef> = {
   },
   // 0.6.0 mid-turn (replaces the 4th-call count): a J message arrived mid-turn and no SendUserMessage has answered it.
   // first-reply (replaces the 8-call silence count): work started in a J turn before its first SendUserMessage.
-  'mid-turn': { messages: { line: 'J wrote mid-turn — answer via SendUserMessage now; hand the rest to a background agent' } },
+  // 0.6.20 (burst-safe): while a mid-turn J message is unanswered, every main-thread tool but SendUserMessage, delegation (Agent/Task/SendMessage),
+  // ToolSearch and check_reply is denied (`block`); a reply to it gets `rounds` failed check rounds (0: its first check_reply round is the only one);
+  // a message J adds within burstSeconds of his previous one, unseen when the reply is sent, gets one `fold` deny so one reply covers the burst.
+  // valve: denials per pending set before the block falls back to the `line` nudge (a runtime where the reply cannot go out never deadlocks).
+  'mid-turn': {
+    numbers: { burstSeconds: 10, rounds: 0, valve: 6 },
+    messages: {
+      line: 'J wrote mid-turn — answer via SendUserMessage now; hand the rest to a background agent',
+      block: 'Blocked: J wrote mid-turn ({n} unanswered). Reply now: ONE SendUserMessage covering each message below, then delegate the rest (Agent/SendMessage). Other tools stay blocked till it goes out. {list}',
+      fold: 'Not sent: J added {n} message(s) within {secs}s. Fold them into this same reply and resend via SendUserMessage; no new check_reply needed. {list}',
+    },
+  },
   // 0.6.3 done-claim: a J-facing done/fixed/live/shipped/published/verified claim about this turn's write with no read-back after the last write.
   'done-claim': {
     patterns: { claim: /(?<!\bun)(?<!\bnot )(?<!n't )(?<!\bnot yet )\b(?:done|fixed|live|shipped|published|verified)\b/i },

@@ -1304,6 +1304,7 @@ test('0.6.0 repeat-miss: a second non-prevention in one chat gets one line; the 
 
 test('0.6.0 mid-turn: a J message typed mid-turn flags the next work call until a SendUserMessage answers it; agent/notification text never; once seen, the 4th-call fallback is off', async ($, on) => {
   engine(on)
+  on('tool.list', () => ({ value: [{ name: 'Bash', description: '', mcp: false }] })) // 0.6.20: no SendUserMessage in the session: the nudge fallback, never the block
   const MID = /J wrote mid-turn — answer via SendUserMessage now/
   await $.turn.start(turn('m1'))
   await $.tool.call({ tool: 'SendUserMessage', message: 'on it' } as any)
@@ -1994,9 +1995,10 @@ const deepEngine = (on: any, legacy: boolean | object = true) => {
   const sidBox = { v: 'session-D' }
   on('session.id', () => ({ value: sidBox.v }))
   on('turn.start', (_$: any, e: any) => ({ turnId: e.turnId }))
-  on('tool.call', () => ({ result: {}, text: (judge as any).toolText ?? '' }))
+  const calls: any[] = [] // 0.6.20: tool calls that reached the engine beneath (not denied, not answered by the plugin)
+  on('tool.call', (_$: any, e: any) => { calls.push(e); return { result: {}, text: (judge as any).toolText ?? '' } })
   on('prompt.submit', (_$: any, e: any) => { seen.push((e.context ?? []).join('\n')); return { text: e.text, context: e.context } })
-  return { mem, seen, judge, sidBox }
+  return { mem, seen, judge, sidBox, calls }
 }
 const CLEAN = 'Noted. Two options left.'
 const send = (m: string) => ({ tool: 'SendUserMessage', message: m } as any)
@@ -3001,7 +3003,7 @@ test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft pas
   const d = rows[0].data
   expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
   expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 3, judge_ok: 3, judge_unavailable: 0, tokens_in: 300, tokens_out: 60, tokens_cache: 150 })
-  expect(PLUGIN_VERSION).toBe('0.6.19')
+  expect(PLUGIN_VERSION).toBe('0.6.20')
 })
 test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
   const { mem } = deepEngine(on, true)
@@ -3180,4 +3182,214 @@ test('0.6.19 source gate: short replies skip it before the gate runs; light mode
   const r = await $.tool.call(chk(`${LONGW}\nThe deploy is verified and tested.`, { evidence: '' })) as any
   expect(r.result).toMatch(/^PASS /)
   expect(judge.calls.length).toBe(0)
+})
+
+
+// ---- 0.6.20 burst-safe mid-turn: block, one check round, burst batching ----
+const TOOLS_WITH_SEND = [{ name: 'SendUserMessage', description: '', mcp: false }, { name: 'Bash', description: '', mcp: false }, { name: CHECK_TOOL, description: '', mcp: true }]
+const BLOCK = /^Blocked: J wrote mid-turn/
+const FOLD = /^Not sent: J added/
+const clockAt = (on: any) => { const c = { t: Date.parse('2026-11-10T21:40:55+08:00') }; on('clock.now', () => ({ value: c.t })); return c }
+const jMid = (text: string, id = 'm1') => ({ text, turnId: id, origin: { kind: 'bridge' } } as any)
+const denyOf = (r: any): string => String(r?.deny ?? '')
+
+test('0.6.20 block: a pending mid-turn J message denies every main-thread tool but the reply, delegation, ToolSearch and check_reply, until a SendUserMessage answers it', async ($, on) => {
+  engine(on)
+  on('tool.list', () => ({ value: TOOLS_WITH_SEND }))
+  clockAt(on)
+  await $.turn.start(turn('m1'))
+  expect(denyOf(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).toBe('') // nothing pending: free
+  await $.prompt.submit(jMid('also check clause 9'))
+  for (const t of [{ tool: 'Edit', file_path: '/x' }, { tool: 'Read', file_path: '/x' }, { tool: 'mcp__memory__memory_read', path: '/x' }, { tool: 'Artifact', action: 'read', url: 'u' }, { tool: 'mcp__claude_ai__ArtifactData', action: 'set' }, { tool: 'AskUserQuestion' }]) {
+    const d = denyOf(await $.tool.call(t as any))
+    expect([t.tool, d]).toEqual([t.tool, expect.stringMatching(BLOCK)])
+    expect(d).toMatch(/\(1\) "also check clause 9"/)
+    expect(d).toMatch(/ONE SendUserMessage/)
+  }
+  for (const t of [{ tool: 'Agent', prompt: 'x', description: 'x', run_in_background: true }, { tool: 'SendMessage', to: 'w', message: 'x' }, { tool: 'ToolSearch', query: 'select:SendMessage' }]) expect([t.tool, denyOf(await $.tool.call(t as any))]).toEqual([t.tool, ''])
+  expect(denyOf(await $.tool.call({ tool: 'Edit', file_path: '/x', agentId: 'a1' } as any))).toBe('') // subagents are never blocked
+  expect(denyOf(await $.tool.call({ tool: 'SendUserMessage', message: 'Clause 9: on it, folded into the running pass.' } as any))).toBe('')
+  expect(denyOf(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).toBe('')
+  // agent / notification text is not J: no block
+  await $.prompt.submit({ text: '<task-notification><status>completed</status></task-notification>', turnId: 'm1', origin: { kind: 'task-notification' } } as any)
+  expect(denyOf(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).toBe('')
+  // a new turn starts clean
+  await $.prompt.submit(jMid('one more'))
+  await $.turn.start(turn('m2'))
+  expect(denyOf(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).toBe('')
+})
+
+test('0.6.20 block valve: after mid-turn.valve denials the pending set falls back to the nudge (no deadlock); a pack may set valve 1-50', async ($, on) => {
+  engine(on)
+  on('tool.list', () => ({ value: TOOLS_WITH_SEND }))
+  clockAt(on)
+  await $.turn.start(turn('v1'))
+  await $.prompt.submit(jMid('status?', 'v1'))
+  for (let i = 0; i < 6; i++) expect(denyOf(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).toMatch(BLOCK)
+  const r = await $.tool.call({ tool: 'Edit', file_path: '/x' } as any)
+  expect(denyOf(r)).toBe('')
+  expect(ctx(r)).toMatch(/J wrote mid-turn — answer via SendUserMessage now/)
+  const pk = (v: Record<string, number>) => ({ version: BUNDLED_VERSION + 1, checks: { 'mid-turn': { numbers: v } } })
+  expect(validatePack(pk({ valve: 1, burstSeconds: 0, rounds: 3 }))).toEqual([])
+  expect(validatePack(pk({ valve: 0 })).join()).toMatch(/mid-turn\.numbers\.valve/)
+  expect(validatePack(pk({ rounds: 4 })).join()).toMatch(/mid-turn\.numbers\.rounds/)
+  expect(validatePack(pk({ burstSeconds: 61 })).join()).toMatch(/mid-turn\.numbers\.burstSeconds/)
+  expect(validatePack({ version: BUNDLED_VERSION + 1, checks: { 'mid-turn': { messages: { block: 'reply now {list} {bogus}' } } } } as any).join()).toMatch(/unknown placeholder \{bogus\}/)
+})
+
+test('0.6.20 burst: messages that queue up between two tool calls are listed in one deny and answered by one reply', async ($, on) => {
+  const sent: string[] = []
+  engine(on, {}, { tool: (e: any) => { if (e.tool === 'SendUserMessage') sent.push(e.message); return { result: {}, text: '' } } })
+  on('tool.list', () => ({ value: TOOLS_WITH_SEND }))
+  const c = clockAt(on)
+  await $.turn.start(turn('b1'))
+  await $.tool.call({ tool: 'Bash', command: 'ls' } as any)
+  for (const [i, m] of ['a', 'b', 'c'].entries()) { c.t += 2000; await $.prompt.submit(jMid(`msg ${m}`, 'b1')); expect(i).toBeLessThan(3) }
+  const d = denyOf(await $.tool.call({ tool: 'Bash', command: 'make' } as any))
+  expect(d).toMatch(/\(3 unanswered\)/)
+  expect(d).toMatch(/\(1\) "msg a" \(2\) "msg b" \(3\) "msg c"/)
+  expect(denyOf(await $.tool.call({ tool: 'SendUserMessage', message: 'a: yes. b: done by 22:00. c: noted.' } as any))).toBe('')
+  expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'make' } as any))).toBe('')
+  expect(sent.length).toBe(1)
+})
+
+test('0.6.20 burst fold-in: a message J adds within burstSeconds that the model had not seen gets one deny on the reply, so one resent reply covers it; a later, separate message stays pending', async ($, on) => {
+  engine(on)
+  on('tool.list', () => ({ value: TOOLS_WITH_SEND }))
+  const c = clockAt(on)
+  await $.turn.start(turn('f1'))
+  c.t += 5000; await $.prompt.submit(jMid('first', 'f1'))
+  expect(denyOf(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).toMatch(BLOCK) // the model now sees "first"
+  c.t += 4000; await $.prompt.submit(jMid('second', 'f1')) // 4 s later, arrives while the reply is drafted: unseen
+  const f = denyOf(await $.tool.call({ tool: 'SendUserMessage', message: 'first: on it' } as any))
+  expect(f).toMatch(FOLD)
+  expect(f).toMatch(/\(1\) "second"/)
+  expect(f).not.toMatch(/"first"/)
+  expect(denyOf(await $.tool.call({ tool: 'SendUserMessage', message: 'first: on it. second: yes.' } as any))).toBe('')
+  expect(denyOf(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).toBe('') // both answered
+  // a message 30 s after the previous one is its own: the reply goes out, the message stays pending for the next reply
+  c.t += 5000; await $.prompt.submit(jMid('third', 'f1'))
+  expect(denyOf(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).toMatch(/"third"/)
+  c.t += 30000; await $.prompt.submit(jMid('fourth', 'f1'))
+  expect(denyOf(await $.tool.call({ tool: 'SendUserMessage', message: 'third: done' } as any))).toBe('')
+  const d = denyOf(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))
+  expect(d).toMatch(/\(1 unanswered\)/)
+  expect(d).toMatch(/"fourth"/)
+  // one fold deny per reply: a second late message does not hold the reply again
+  c.t += 2000; await $.prompt.submit(jMid('fifth', 'f1'))
+  expect(denyOf(await $.tool.call({ tool: 'SendUserMessage', message: 'fourth: ok' } as any))).toMatch(FOLD)
+  c.t += 2000; await $.prompt.submit(jMid('sixth', 'f1'))
+  expect(denyOf(await $.tool.call({ tool: 'SendUserMessage', message: 'fourth: ok. fifth: ok.' } as any))).toBe('')
+  expect(denyOf(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).toMatch(/"sixth"/)
+})
+
+test('0.6.20 deep: a reply to a pending mid-turn message gets one check round (problems go out tagged); the same draft outside mid-turn still fails first', async ($, on) => {
+  const { judge } = deepEngine(on, false)
+  on('tool.list', () => ({ value: TOOLS_WITH_SEND }))
+  clockAt(on)
+  judge.reply = { isAnswered: true, text: '{"ok":false,"problems":["(a) contradicted: fix the date"]}', usage: {} }
+  await $.prompt.submit({ text: 'draft the notice' } as any)
+  await $.turn.start(turn('d1'))
+  const draft = 'Correction: the notice date was wrong; it is now 12 November, and the draft is saved and verified against the deed.'
+  expect(((await $.tool.call(chk(draft))) as any).result).toMatch(/^Deep mode: fix these/) // normal reply: (a) gets its rounds
+  await $.prompt.submit(jMid('also, is the deed signed?', 'd1'))
+  const calls = judge.calls.length
+  const r = String(((await $.tool.call(chk(`${draft} Deed: unsigned.`))) as any).result)
+  expect(r).toMatch(/^PASS \S+ \(note: 0 failed checks, open problems: .*judge: \(a\) contradicted/)
+  expect(r).toMatch(/mid-turn reply: one check round only; tag these open problems/)
+  expect(judge.calls.length).toBe(calls + 1) // exactly one judge round
+  expect(String(judge.calls.at(-1)?.messages?.map?.((m: any) => JSON.stringify(m.content)).join(' ') ?? JSON.stringify(judge.calls.at(-1)))).toMatch(/is the deed signed/) // the judge reads the pending message as the ask
+  // a tagged edit of the passed draft goes out without another round
+  expect(denyOf(await $.tool.call(send(`${draft} Deed: unsigned. [open: date unconfirmed]`)))).toBe('')
+  expect(judge.calls.length).toBe(calls + 1)
+})
+
+test('0.6.20 deep: mid-turn.rounds from a pack allows one failed round before the tagged pass; an unchecked SendUserMessage mid-turn is never denied at rounds 0', async ($, on) => {
+  const { judge } = deepEngine(on, { version: BUNDLED_VERSION + 1, checks: { 'mid-turn': { numbers: { rounds: 1 } }, 'deep-cap': { numbers: { cap: 2 } } } })
+  on('tool.list', () => ({ value: TOOLS_WITH_SEND }))
+  clockAt(on)
+  judge.reply = { isAnswered: true, text: '{"ok":false,"problems":["(b) unsupported: show the check"]}', usage: {} }
+  await $.prompt.submit({ text: 'go' } as any)
+  await $.turn.start(turn('d2'))
+  await $.prompt.submit(jMid('and the SPA?', 'd2'))
+  const draft = 'SPA: verified and saved; the schedule matches the signed term sheet, and every figure was checked again just now.'
+  expect(((await $.tool.call(chk(draft))) as any).result).toMatch(/^Deep mode: fix these, then call check_reply again \(1\/1\)/)
+  expect(((await $.tool.call(chk(draft))) as any).result).toMatch(/^PASS \S+ \(note: 1 failed checks, open problems/)
+})
+
+test('0.6.20 deep: at the bundled rounds 0 an unchecked mid-turn SendUserMessage goes out with a cap note instead of a deny', async ($, on) => {
+  deepEngine(on, false)
+  on('tool.list', () => ({ value: TOOLS_WITH_SEND }))
+  clockAt(on)
+  await $.prompt.submit({ text: 'go' } as any)
+  await $.turn.start(turn('d3'))
+  expect(denyOf(await $.tool.call(send(BADC)))).toMatch(/^Deep mode: call check_reply first/) // not mid-turn: denied as before
+  await $.prompt.submit(jMid('quick q', 'd3'))
+  expect(denyOf(await $.tool.call({ tool: 'Edit', file_path: '/x' } as any))).toMatch(BLOCK)
+  const r = await $.tool.call(send(BADC))
+  expect(denyOf(r)).toBe('')
+  expect(ctx(r)).toMatch(/Deep mode: sent after 0 failed checks with open problems/)
+})
+
+// Replay of the 10 Nov 2026 session, 21:41-21:42 SGT: 7 J messages typed while main ran Bash, memory, Artifact and check_reply calls.
+// Timings and tool order are reconstructed from main's account of the failure (message text is a placeholder, not J's words).
+// The simulated model attempts each recorded call; on a block it drafts one reply covering the listed messages (check_reply, then
+// SendUserMessage; a fold deny is folded in and resent), then retries the recorded call.
+const BURST_2026_11_10: { at: string; j?: string; tool?: Record<string, unknown> }[] = [
+  { at: '21:40:58', tool: { tool: 'Bash', command: 'claude plugin test .' } },
+  { at: '21:41:03', j: 'J msg 1' },
+  { at: '21:41:05', tool: { tool: 'mcp__memory__memory_read', path: '/areas/orchestrator-skill.md' } },
+  { at: '21:41:09', j: 'J msg 2' },
+  { at: '21:41:11', j: 'J msg 3' },
+  { at: '21:41:14', tool: { tool: 'Artifact', action: 'read', url: 'https://claude.ai/artifact/x' } },
+  { at: '21:41:22', j: 'J msg 4' },
+  { at: '21:41:25', tool: { tool: CHECK_TOOL, text: 'Status: building 0.6.19; ETA 21:50.', ask: 'go' } },
+  { at: '21:41:27', tool: { tool: 'Bash', command: 'git status' } },
+  { at: '21:41:38', j: 'J msg 5' },
+  { at: '21:41:40', j: 'J msg 6' },
+  { at: '21:41:41', tool: { tool: 'mcp__claude_ai__ArtifactData', action: 'set', collection: 'status', doc_id: 'x' } },
+  { at: '21:42:02', j: 'J msg 7' },
+  { at: '21:42:05', tool: { tool: 'Bash', command: 'zip -r out.zip .' } },
+]
+test('0.6.20 replay 10 Nov 21:41-21:42 burst: the first tool that runs after each J message is the reply or a delegation; replies are batched and each takes one check round', async ($, on) => {
+  const { judge, calls } = deepEngine(on, false)
+  on('tool.list', () => ({ value: TOOLS_WITH_SEND }))
+  const c = clockAt(on)
+  judge.reply = { isAnswered: true, text: '{"ok":false,"problems":["(c) work left undone: finish it"]}', usage: {} } // worst case: the judge never passes
+  const ran = calls // calls that reached the engine (not denied, not answered by the hook)
+  const at = (hms: string) => { c.t = Date.parse(`2026-11-10T${hms}+08:00`) }
+  at('21:40:55')
+  await $.prompt.submit({ text: 'build dispatch-guard 0.6.19 and zip it' } as any)
+  await $.turn.start(turn('burst'))
+  let checks = 0
+  const replies: string[] = []
+  const reply = async (listed: string) => {
+    const names = [...listed.matchAll(/"(J msg \d)"/g)].map(m => m[1])
+    let text = `${names.map(n => `${n}: on it, folded into the 0.6.19 run`).join('. ')}. Next: zip by 21:50.`
+    checks += 1
+    const pr = String(((await $.tool.call({ tool: CHECK_TOOL, text, ask: names.join('\n') } as any)) as any).result)
+    expect(pr).toMatch(/^PASS/) // one round, even with a judge that never passes
+    for (let i = 0; i < 2; i++) {
+      const r = await $.tool.call({ tool: 'SendUserMessage', message: text } as any)
+      if (!FOLD.test(denyOf(r))) { expect(denyOf(r)).toBe(''); replies.push(text); return }
+      const more = [...denyOf(r).matchAll(/"(J msg \d)"/g)].map(m => m[1])
+      text = `${text} ${more.map(n => `${n}: noted`).join('. ')}.`
+    }
+    throw new Error('reply never went out')
+  }
+  const jAt: number[] = []
+  for (const ev of BURST_2026_11_10) {
+    at(ev.at)
+    if (ev.j !== undefined) { await $.prompt.submit(jMid(ev.j, 'burst')); jAt.push(ran.length); continue }
+    let r = await $.tool.call(ev.tool as any)
+    if (BLOCK.test(denyOf(r))) { await reply(denyOf(r)); r = await $.tool.call(ev.tool as any) }
+    expect([ev.at, denyOf(r)]).toEqual([ev.at, ''])
+  }
+  // every J message: the first call that ran after it is the reply (or a delegation)
+  for (const i of jAt) expect(ran[i]?.tool ?? '').toMatch(/^(SendUserMessage|Agent|SendMessage)$/)
+  // every message answered, in fewer replies than messages, one check round each
+  const all = replies.join(' ')
+  for (let n = 1; n <= 7; n++) expect(all).toMatch(new RegExp(`J msg ${n}:`))
+  expect(replies.length).toBeLessThan(7)
+  expect(checks).toBe(replies.length)
 })
