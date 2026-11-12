@@ -29,7 +29,7 @@ One line per version, newest first. Every version bump adds its line here in the
 - 0.6.0: leap-line, source-addendum, arith-proof, repeat-miss; first-reply and mid-turn replace the silence and 4th-call guards; thresholds from THRESHOLDS.md.
 - 0.5.9: judges J's own text, not the raw prompt with its prepended system-reminder.
 - 0.5.8: rule pack: check regexes, thresholds and texts overridable without an upload.
-- 0.5.7: no record.
+- 0.5.7: dangling-ref: a "D1", "see below" or "next message" reference with nothing matching in the reply is flagged.
 - 0.5.6: reply first, ledger and board in the same round or later; clock stamp rides every prompt.
 - 0.5.0 to 0.5.5: no record.
 - 0.4.0: answer checks for recurring misses.
