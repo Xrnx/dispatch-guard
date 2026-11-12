@@ -3486,7 +3486,8 @@ test('0.6.21 judge evidence: SendUserMessage texts sent earlier in the turn reac
   expect(p).toContain(`Already sent to J this turn: ${CLEAN}`)
 })
 
-test('0.6.21 efficiency-fix: an Efficiency line describing a fix with no write/launch fires the one parked-fix line; none, (needs you), a write or a launch do not', async ($, on) => {
+test('0.6.21 efficiency-fix ships DARK: detector matches; turn end adds no parked-fix line while efficiency-fix is in DARK', async ($, on) => {
+  expect(DARK.has('efficiency-fix')).toBe(true)
   expect(efficiencyFix('Result: ok\n**Efficiency:** I could have cached the lookup.', false)).toBe(true)
   expect(efficiencyFix('Efficiency: should batch the two reads next time', false)).toBe(true)
   expect(efficiencyFix('Efficiency: none', false)).toBe(false)
@@ -3497,7 +3498,7 @@ test('0.6.21 efficiency-fix: an Efficiency line describing a fix with no write/l
   on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
   await $.turn.start(turn('t1'))
   const r = await $.turn.complete(end('t1', 'Result: ok.\nEfficiency: I could have cached the lookup.')) as any
-  expect(r.text).toContain('Fix named but not started')
+  expect(r.text ?? '').not.toContain('Fix named but not started')
   await $.turn.start(turn('t2'))
   const q = await $.turn.complete(end('t2', 'Result: ok.\nEfficiency: none')) as any
   expect(q.text).not.toContain('Fix named but not started')

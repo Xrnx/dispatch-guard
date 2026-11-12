@@ -18,7 +18,7 @@ const msg = (id: string, k = 'line', vars?: Record<string, string | number>): st
 export const OFF: ReadonlySet<string> = new Set(['style', 'verify-proof', 'leap-line', 'arith-proof', 'lookup-first', 'parked-fix', 'board-dispatch', 'done-claim', 'source-addendum'])
 export const live = (id: string): boolean => !OFF.has(id)
 // 0.6.14 dark checks: computed and logged to the Scoreboard (hookLog) but never shown to the model or J. Promote by removing the id here.
-export const DARK: ReadonlySet<string> = new Set(['stop-figures', 'stop-sources', 'stop-writes', 'promise-proof', 'source-gate']) // 0.6.19: source-gate is log-only until deep-evidence.sourceGate is 2
+export const DARK: ReadonlySet<string> = new Set(['stop-figures', 'stop-sources', 'stop-writes', 'promise-proof', 'source-gate', 'efficiency-fix']) // 0.6.19: source-gate is log-only until deep-evidence.sourceGate is 2
 
 const EXEMPT = new Set(['Agent', 'SendMessage', 'TaskCreate', 'TaskUpdate', 'Read', 'Glob', 'Grep', 'ToolSearch', 'TaskGet', 'TaskList'])
 const SAVE_TOOL = /(^|__)memory_(write|str_replace|append)$|(^|__)propose_skills$/ // 0.6.21 save-gate: the rule-saving tools
@@ -1266,7 +1266,7 @@ export const deepProblems = (text: string, f: DeepFacts): Problem[] => {
   // 0.6.16: the offer / parked-fix / miss / promise checks run here on the draft itself, pre-send (the turn-end pass skips a final text that matches a PASS).
   if (offers(text, f.askTool === true) && DEEP_OFFER.test(proseLines(text).join('\n'))) add('offer-guard', msg('offer-guard'))
   if (parkedFix(text, f.acted)) add('parked-fix', msg('parked-fix'))
-  else if (efficiencyFix(text, f.acted || f.launch === true)) add('parked-fix', msg('parked-fix'))
+  else if (efficiencyFix(text, f.acted || f.launch === true)) add('efficiency-fix', msg('parked-fix'))
   if (missUnlanded(text, f.landed === true || f.acted)) add('miss-landing', msg('miss-landing'))
   if (unsavedPromise(text, f.saved === true, f.asked)) add('unsaved-promise', msg('unsaved-promise'))
   if (f.wrote !== true && promises(text)) add('promise-proof', msg('promise-proof'))
@@ -2178,7 +2178,7 @@ export const register: Register = on => {
     // miss-landing wins over parked-fix: a turn gets at most one of the two lines.
     if (!skipDeep && missUnlanded(e.answer, proof || landed)) line = msg('miss-landing')
     else if (line === undefined && !skipDeep && live('parked-fix') && parkedFix(e.answer, proof || acted)) line = msg('parked-fix')
-    else if (line === undefined && !skipDeep && efficiencyFix(e.answer, proof || acted || landed || wrote)) line = msg('parked-fix')
+    else if (line === undefined && !skipDeep && !DARK.has('efficiency-fix') && efficiencyFix(e.answer, proof || acted || landed || wrote)) line = msg('parked-fix')
     let continued = false
     if (line === msg('idle-guard')) {
       idleFired = true
