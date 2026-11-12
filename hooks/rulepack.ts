@@ -28,6 +28,7 @@ export const RANGES: Record<string, Record<string, [number, number]>> = {
   'deep-leap': { minWords: [20, 1000], minBullets: [1, 50] },
   'deep-cap': { cap: [0, 3] }, // 0.6.17: failed checks per draft before PASS with a note
   'deep-judge': { minWords: [0, 500] }, // 0.6.17: replies shorter than this skip the judge (unless the claim pattern matches)
+  'save-gate': { enforce: [0, 2] }, // 0.6.21: 0 off, 1 log-only (default), 2 live: rule saves and unchecked replies
   'mid-turn': { burstSeconds: [0, 60], rounds: [0, 3], valve: [1, 50] }, // 0.6.20: burst window, failed check rounds for a mid-turn reply, block valve
   'deep-evidence': { sessionChars: [0, 40000], judgeChars: [0, 20000], factsChars: [0, 2000], sourceGate: [0, 2] }, // 0.6.18: rolling per-session evidence store size; share shown to the judge
 }
@@ -118,7 +119,7 @@ export const BUNDLED: Record<string, CheckDef> = {
   },
   'eta-proof': {
     patterns: { eta: /\b(ETA|done)\s*[:≈~]?\s*~?\d+(?:\s?[–-]\s?\d+)?\s?(min|mins|minutes|h|hrs?)\b/i, scaled: /×|\(\s*\d+\s?[x*]\s?\d/ }, // V4: ranges
-    messages: { line: 'eta-proof: minute ETA with no E×R — scale by the calibration ratio before relaying.' },
+    messages: { line: 'eta-proof: ETA not calibrated (minute ETA with no E×R) — scale by /areas/orchestrator-calibration.md before relaying.' },
   },
   'checked-line': {
     patterns: { ask: /\b(best|recommend|which|options?|alternatives?|should i|what about|anything else|compare|vs\.?)\b/i, checked: /\bchecked:/i },
@@ -286,6 +287,11 @@ export const BUNDLED: Record<string, CheckDef> = {
     numbers: { minWords: 80, minBullets: 5 },
     messages: { line: 'substantive reply without a Leap/Efficiency line' },
   },
+  // 0.6.21 save-gate (J approved 12 Nov): enforce 0 off, 1 log-only DARK (default), 2 live. Live: a rule save (memory write/str_replace/append, propose_skills; not /areas/handoffs/ paths,
+  // not ArtifactData) is denied until check_reply returned PASS this turn; a deep-mode final reply with no matching PASS is logged and gets one short carry line (`miss`), never a redo.
+  'save-gate': { numbers: { enforce: 1 }, messages: {
+    line: 'Run check_reply (evidence incl. each rule-writing gate step\'s result) before saving a rule.',
+    miss: 'Final reply was not passed by check_reply: add one short addendum with any claim the check would have flagged; no redo.' } },
   // 0.6.17 deep-cap: failed checks per draft before PASS-with-note (0 = never fail a draft).
   'deep-cap': { numbers: { cap: 1 } },
   // 0.6.17 deep-judge: replies under minWords words skip the AI judge unless `claim` matches; `rules` is the judge's system text.

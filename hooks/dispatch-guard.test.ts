@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { CARD } from './orchestrator-card'
 import { validatePack, bundledPackJson, BUNDLED_VERSION, mergePack, bundledRules } from './rulepack'
-import { MISSING_LINE, sessionBlock, SESSION_INDEX_KEY, KEEP_SESSIONS, problemLabel, SET_RULES_TOOL, RULES_KEY, deepLine, setRules, cleanProblem, deepRow, tokensOf, JUDGE_TOKENS_KEY, judgeRules, skipJudge, denyCap, modeCommand, deepProblems, missingEfficiency, deepMissingLeap, replyHash, CHECK_TOOL, MODE_KEY, DENY_LOG_KEY, CAUGHT_KEY, JUDGE_KEY, JUDGE_RULES, parseJudge, DEEP_LINE, DEEP_DARK, CHECK_SPEC, stubOutput, undefinedLabels, questionOnly, redrafts, missingLeap, uncomputed, numbersIn, nonPreventions, startsWork, answersFirst, scopePhrases, asksJ, buriedAsks, promises, parkedFix, foregroundWait, offers, RELAY_AT, longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, jText, reasks, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL, clockStamp, danglingRefs, isJ, knowableAsks, inputAsk, workMade, draftGap, missUnlanded, fixEvidence, settleRow, absoluteClaims, openQuestions, PLUGIN_VERSION, sourceGate } from './register'
+import { MISSING_LINE, sessionBlock, SESSION_INDEX_KEY, KEEP_SESSIONS, problemLabel, SET_RULES_TOOL, RULES_KEY, deepLine, setRules, cleanProblem, deepRow, tokensOf, JUDGE_TOKENS_KEY, judgeRules, skipJudge, denyCap, modeCommand, deepProblems, missingEfficiency, deepMissingLeap, replyHash, CHECK_TOOL, MODE_KEY, DENY_LOG_KEY, CAUGHT_KEY, JUDGE_KEY, JUDGE_RULES, parseJudge, DEEP_LINE, DEEP_DARK, CHECK_SPEC, stubOutput, undefinedLabels, questionOnly, redrafts, missingLeap, uncomputed, numbersIn, nonPreventions, startsWork, answersFirst, scopePhrases, asksJ, buriedAsks, promises, parkedFix, foregroundWait, offers, RELAY_AT, longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, jText, reasks, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL, clockStamp, danglingRefs, isJ, knowableAsks, inputAsk, workMade, draftGap, missUnlanded, fixEvidence, settleRow, absoluteClaims, openQuestions, PLUGIN_VERSION, sourceGate, efficiencyFix } from './register'
 
 const TURN = /4th tool call this turn/
 const BASH = /Foreground Bash builds\/tests\/installs\/clones\/waits/
@@ -3003,7 +3003,7 @@ test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft pas
   const d = rows[0].data
   expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
   expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 3, judge_ok: 3, judge_unavailable: 0, tokens_in: 300, tokens_out: 60, tokens_cache: 150 })
-  expect(PLUGIN_VERSION).toBe('0.6.20')
+  expect(PLUGIN_VERSION).toBe('0.6.21')
 })
 test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
   const { mem } = deepEngine(on, true)
@@ -3392,4 +3392,139 @@ test('0.6.20 replay 10 Nov 21:41-21:42 burst: the first tool that runs after eac
   for (let n = 1; n <= 7; n++) expect(all).toMatch(new RegExp(`J msg ${n}:`))
   expect(replies.length).toBeLessThan(7)
   expect(checks).toBe(replies.length)
+})
+
+// 0.6.21 save-gate (J approved 12 Nov): a rule save waits for a check_reply PASS in the same turn; a deep final reply with no matching PASS is a logged miss. Dark by default.
+const SAVE_LIVE = { version: BUNDLED_VERSION + 1, checks: { 'deep-cap': { numbers: { cap: 2 } }, 'deep-judge': { numbers: { minWords: 0 } }, 'deep-evidence': { numbers: { sourceGate: 0 } }, 'save-gate': { numbers: { enforce: 2 } } } }
+const SAVE_DARK = { version: BUNDLED_VERSION + 1, checks: { 'deep-cap': { numbers: { cap: 2 } }, 'deep-judge': { numbers: { minWords: 0 } }, 'deep-evidence': { numbers: { sourceGate: 0 } } } }
+const saveTools = ['mcp__memory__memory_write', 'mcp__memory__memory_str_replace', 'mcp__memory__memory_append', 'propose_skills']
+const saveCall = (tool: string, path = '/topics/x.md') => ({ tool, path, content: 'rule' } as any)
+test('save-gate (live): a rule save without a PASS this turn is denied with one short line, for each save tool', async ($, on) => {
+  const { calls } = deepEngine(on, SAVE_LIVE)
+  await $.prompt.submit({ text: 'save this rule' } as any)
+  await $.turn.start(turn('t1'))
+  for (const t of saveTools) {
+    const r = await $.tool.call(saveCall(t)) as any
+    expect(r.deny).toBe("Run check_reply (evidence incl. each rule-writing gate step's result) before saving a rule.")
+  }
+  expect(calls.filter((c: any) => saveTools.includes(c.tool)).length).toBe(0)
+})
+test('save-gate (live): a save after a check_reply PASS this turn goes through; the next prompt needs a new PASS', async ($, on) => {
+  const { calls } = deepEngine(on, SAVE_LIVE)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.prompt.submit({ text: 'save this rule' } as any)
+  await $.turn.start(turn('t1'))
+  expect(((await $.tool.call(chk(CLEAN))) as any).result).toMatch(/^PASS /)
+  for (const t of saveTools) expect(((await $.tool.call(saveCall(t))) as any).deny).toBeUndefined()
+  expect(calls.filter((c: any) => saveTools.includes(c.tool)).length).toBe(saveTools.length)
+  await $.turn.complete(end('t1', CLEAN))
+  await $.prompt.submit({ text: 'another rule' } as any)
+  await $.turn.start(turn('t2'))
+  expect(((await $.tool.call(saveCall('mcp__memory__memory_write'))) as any).deny).toMatch(/Run check_reply/)
+})
+test('save-gate (live): /areas/handoffs/ memory writes, ArtifactData and memory reads are exempt', async ($, on) => {
+  deepEngine(on, SAVE_LIVE)
+  await $.prompt.submit({ text: 'save the handoff' } as any)
+  await $.turn.start(turn('t1'))
+  for (const p of ['/areas/handoffs/foo.md', 'areas/handoffs/bar.md']) expect(((await $.tool.call(saveCall('mcp__memory__memory_write', p))) as any).deny).toBeUndefined()
+  expect(((await $.tool.call(saveCall('mcp__memory__memory_write', '/areas/handoffs-x/foo.md'))) as any).deny).toMatch(/Run check_reply/)
+  expect(((await $.tool.call({ tool: 'ArtifactData', action: 'set', url: 'u' } as any)) as any).deny).toBeUndefined()
+  expect(((await $.tool.call({ tool: 'mcp__memory__memory_read', path: '/topics/x.md' } as any)) as any).deny).toBeUndefined()
+})
+test('save-gate: dark by default (save goes through, logged dark:true); light mode and pack 0 never gate; range is 0-2', async ($, on) => {
+  const { mem } = deepEngine(on, SAVE_DARK)
+  await $.prompt.submit({ text: 'save this rule' } as any)
+  await $.turn.start(turn('t1'))
+  expect(((await $.tool.call(saveCall('mcp__memory__memory_write'))) as any).deny).toBeUndefined()
+  expect((mem[DENY_LOG_KEY] as any[]).filter(r => r.dark === true && r.checks[0] === 'save-gate').length).toBe(1)
+  expect(validatePack({ version: BUNDLED_VERSION + 1, checks: { 'save-gate': { numbers: { enforce: 3 } } } }).length).toBeGreaterThan(0)
+  expect(validatePack({ version: BUNDLED_VERSION + 1, checks: { 'save-gate': { numbers: { enforce: 2 } } } })).toEqual([])
+})
+test('save-gate: a subagent save and a light-mode save are never gated', async ($, on) => {
+  deepEngine(on, SAVE_LIVE)
+  await $.prompt.submit({ text: 'light mode' } as any)
+  await $.turn.start(turn('t1'))
+  expect(((await $.tool.call(saveCall('mcp__memory__memory_write'))) as any).deny).toBeUndefined()
+  await $.prompt.submit({ text: 'deep mode' } as any)
+  await $.turn.start(turn('t2'))
+  expect(((await $.tool.call({ ...saveCall('mcp__memory__memory_write'), agentId: 'a1' })) as any).deny).toBeUndefined()
+})
+test('save-gate reply half: a final reply with no matching PASS logs unchecked-reply (dark: no line); matching PASS or a short reply logs nothing', async ($, on) => {
+  const { mem } = deepEngine(on, SAVE_DARK)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.prompt.submit({ text: 'is it fine?' } as any)
+  await $.turn.start(turn('t1'))
+  const bad = await $.turn.complete(end('t1', 'A different final text.')) as any
+  expect(bad.text).toBe('A different final text.')
+  expect((mem[DENY_LOG_KEY] as any[]).filter(r => r.checks?.[0] === 'unchecked-reply' && r.dark === true).length).toBe(1)
+  await $.prompt.submit({ text: 'is it fine?' } as any)
+  await $.turn.start(turn('t2'))
+  await $.tool.call(chk(CLEAN))
+  await $.turn.complete(end('t2', CLEAN))
+  expect((mem[DENY_LOG_KEY] as any[]).filter(r => r.checks?.[0] === 'unchecked-reply').length).toBe(1)
+})
+test('save-gate reply half (live): the miss adds one short carry line, never a redo or a forced turn', async ($, on) => {
+  deepEngine(on, SAVE_LIVE)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.prompt.submit({ text: 'is it fine?' } as any)
+  await $.turn.start(turn('t1'))
+  const r = await $.turn.complete(end('t1', 'A different final text.')) as any
+  expect(r.text).toContain('Final reply was not passed by check_reply')
+  expect(r.text.split('\n').length).toBe(1)
+})
+
+test('0.6.21 judge evidence: SendUserMessage texts sent earlier in the turn reach the judge as "Already sent to J this turn:"; none sent adds nothing', async ($, on) => {
+  const { judge } = deepEngine(on)
+  await $.prompt.submit({ text: 'status please' } as any)
+  await $.turn.start(turn('t1'))
+  await $.tool.call(chk(CLEAN, { evidence: 'EV1' }))
+  expect(String(judge.calls[0].prompt)).not.toContain('Already sent to J this turn')
+  await $.tool.call({ tool: 'SendUserMessage', message: CLEAN } as any)
+  await $.tool.call(chk(`${CLEAN} Again.`, { evidence: 'EV2' }))
+  const p = String(judge.calls[judge.calls.length - 1].prompt)
+  expect(p).toContain('EV2')
+  expect(p).toContain(`Already sent to J this turn: ${CLEAN}`)
+})
+
+test('0.6.21 efficiency-fix: an Efficiency line describing a fix with no write/launch fires the one parked-fix line; none, (needs you), a write or a launch do not', async ($, on) => {
+  expect(efficiencyFix('Result: ok\n**Efficiency:** I could have cached the lookup.', false)).toBe(true)
+  expect(efficiencyFix('Efficiency: should batch the two reads next time', false)).toBe(true)
+  expect(efficiencyFix('Efficiency: none', false)).toBe(false)
+  expect(efficiencyFix('Efficiency: I could cache it (needs you)', false)).toBe(false)
+  expect(efficiencyFix('Efficiency: I could have cached it', true)).toBe(false)
+  expect(efficiencyFix('Efficiency: cached the lookup (done)', false)).toBe(false)
+  deepEngine(on)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.turn.start(turn('t1'))
+  const r = await $.turn.complete(end('t1', 'Result: ok.\nEfficiency: I could have cached the lookup.')) as any
+  expect(r.text).toContain('Fix named but not started')
+  await $.turn.start(turn('t2'))
+  const q = await $.turn.complete(end('t2', 'Result: ok.\nEfficiency: none')) as any
+  expect(q.text).not.toContain('Fix named but not started')
+})
+
+test('0.6.21 eta-proof also reads SendUserMessage texts: an uncalibrated minute ETA sent mid-turn gets the one line at turn end; a scaled one does not', async ($, on) => {
+  deepEngine(on)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.turn.start(turn('t1'))
+  await $.tool.call({ tool: 'SendUserMessage', message: 'On it, ETA 40 min.' } as any)
+  const r = await $.turn.complete(end('t1', 'Done.')) as any
+  expect(r.text).toMatch(/eta-proof: ETA not calibrated.*orchestrator-calibration\.md/)
+  await $.turn.start(turn('t2'))
+  await $.tool.call({ tool: 'SendUserMessage', message: 'On it, ETA 12 min (40×0.3).' } as any)
+  expect(((await $.turn.complete(end('t2', 'Done.'))) as any).text ?? '').not.toMatch(/eta-proof/)
+})
+
+test('0.6.21 judge auto-evidence: Agent launches (description + model), this turn\'s SendMessage and memory write old/new strings reach the judge, cut to 300 chars', async ($, on) => {
+  const { judge } = deepEngine(on)
+  await $.prompt.submit({ text: 'status please' } as any)
+  await $.turn.start(turn('t1'))
+  await $.tool.call({ tool: 'Agent', description: 'build the zip', model: 'sonnet', prompt: 'x' } as any)
+  await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'please also run the tests' } as any)
+  await $.tool.call({ tool: 'mcp__memory__memory_str_replace', path: '/topics/x.md', old_str: 'OLDSTR', new_str: `NEWSTR${'z'.repeat(400)}` } as any)
+  await $.tool.call(chk(CLEAN, { evidence: 'EV' }))
+  const p = String(judge.calls[0].prompt)
+  expect(p).toContain('Auto-evidence:')
+  for (const t of ['launched build the zip (model sonnet)', 'SendMessage: please also run the tests', 'old "OLDSTR" -> new "NEWSTR']) expect(p).toContain(t)
+  expect(p).not.toContain('z'.repeat(301))
 })

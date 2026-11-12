@@ -21,6 +21,8 @@ export const live = (id: string): boolean => !OFF.has(id)
 export const DARK: ReadonlySet<string> = new Set(['stop-figures', 'stop-sources', 'stop-writes', 'promise-proof', 'source-gate']) // 0.6.19: source-gate is log-only until deep-evidence.sourceGate is 2
 
 const EXEMPT = new Set(['Agent', 'SendMessage', 'TaskCreate', 'TaskUpdate', 'Read', 'Glob', 'Grep', 'ToolSearch', 'TaskGet', 'TaskList'])
+const SAVE_TOOL = /(^|__)memory_(write|str_replace|append)$|(^|__)propose_skills$/ // 0.6.21 save-gate: the rule-saving tools
+export const handoffPath = (p: unknown): boolean => /^\/?areas\/handoffs\//.test(String(p ?? ''))
 const MEMORY_READ = /(^|__)memory_read$/
 const exempt = (tool: string): boolean => EXEMPT.has(tool) || MEMORY_READ.test(tool)
 // 0.6.0: the 4th-call count is only the fallback for a runtime where a mid-turn J message never reaches prompt.submit.
@@ -568,6 +570,13 @@ const NEEDS_J = /\(needs you\)/i
 // parked-fix: a fix named ("should be a cheap fix", "needs to be fixed") with no launch id and no write-type tool this turn.
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'Artifact'])
 export const parkedFix = (answer: string, acted: boolean): boolean => !acted && !NEEDS_J.test(answer) && rx('parked-fix','fix').test(answer)
+// 0.6.21 efficiency-fix: an "Efficiency:" line that describes a fix ("I could have", "would have", "should") with no write, memory write, launch id or SendMessage this turn.
+// "Efficiency: none" and "(needs you)" are exempt. Same one line as parked-fix; live regardless of the parked-fix switch (that check is OFF at turn end).
+const EFF_FIX = /\b(?:I|we)(?:'d| could| would| should| ought)\b|\b(?:could|would|should|ought to)(?: have| be| now)?\b/i
+export const efficiencyFix = (answer: string, acted: boolean): boolean => {
+  if (acted) return false
+  return answer.split('\n').some(l => { const m = /^\W*Efficiency\b\W*:\W*(.*)$/i.exec(l); return m !== null && !/^none\b/i.test(m[1].trim()) && !NEEDS_J.test(m[1]) && EFF_FIX.test(m[1]) })
+}
 // miss-landing: a line opening "Miss:" / "Correction:" / "Gap:" (after markdown bold or bullets) names a miss;
 // it must land a fix (write-type or memory-write tool, or a launch id) or say no fix is needed.
 const LANDING_TOOL = /(^|__)propose_skills$|memory_(write|append|str_replace)$/
@@ -1225,7 +1234,7 @@ export const replyHash = (t: string): string => { const n = String(t ?? '').repl
 export const modeSwitchLine = (m: ReplyMode): string => m === 'deep'
   ? 'Mode switched to deep: replies are checked before J sees them (a few seconds slower).'
   : 'Mode switched to light: replies go straight out; the turn-end check may add a Correction: afterwards.'
-export type DeepFacts = { asked: string; corpus: string; looked: boolean; anyTool: boolean; jTurn: boolean; acted: boolean; landed?: boolean; saved?: boolean; askTool?: boolean; wrote?: boolean; hadLeap?: boolean; hadEff?: boolean }
+export type DeepFacts = { asked: string; corpus: string; looked: boolean; anyTool: boolean; jTurn: boolean; acted: boolean; landed?: boolean; saved?: boolean; askTool?: boolean; wrote?: boolean; hadLeap?: boolean; hadEff?: boolean; launch?: boolean }
 // Deterministic pre-send checks on one message's text (the same checks the turn-end pass runs); returns the exact problems.
 export type Problem = { id: string; text: string; weak?: boolean }
 const EFF_LINE = /(?:^|\n)\W*Efficiency\b\W*:/i
@@ -1257,6 +1266,7 @@ export const deepProblems = (text: string, f: DeepFacts): Problem[] => {
   // 0.6.16: the offer / parked-fix / miss / promise checks run here on the draft itself, pre-send (the turn-end pass skips a final text that matches a PASS).
   if (offers(text, f.askTool === true) && DEEP_OFFER.test(proseLines(text).join('\n'))) add('offer-guard', msg('offer-guard'))
   if (parkedFix(text, f.acted)) add('parked-fix', msg('parked-fix'))
+  else if (efficiencyFix(text, f.acted || f.launch === true)) add('parked-fix', msg('parked-fix'))
   if (missUnlanded(text, f.landed === true || f.acted)) add('miss-landing', msg('miss-landing'))
   if (unsavedPromise(text, f.saved === true, f.asked)) add('unsaved-promise', msg('unsaved-promise'))
   if (f.wrote !== true && promises(text)) add('promise-proof', msg('promise-proof'))
@@ -1496,7 +1506,7 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 // first_draft_pass = of those, prompts with no failed round (a short reply going out directly counts as a pass).
 // judge_ok = judge calls that answered (ok or fail); judge_unavailable = calls with no usable answer.
 export const STATS_KEY = 'deepStats'
-export const PLUGIN_VERSION = '0.6.20'
+export const PLUGIN_VERSION = '0.6.21'
 type Stats = { date: string; prompts: number; firstPass: number; rounds: number; unchecked: number; jc: number; jok: number; jun: number; tin: number; tout: number; tcache: number; epoch?: string; eRounds: number; eFail: boolean; closed?: string }
 export type StatsRow = { source: 'deep-stats'; date: string; session: string; plugin_version: string; prompts_judged: number; first_draft_pass: number; unchecked: number; rounds_total: number; judge_calls: number; judge_ok: number; judge_unavailable: number; tokens_in: number; tokens_out: number; tokens_cache: number }
 const readStats = async ($: EngineInterface, sid: string, date: string): Promise<Stats> => {
@@ -1673,6 +1683,8 @@ export const register: Register = on => {
   let turnCorpus = '' // 0.6.14: this turn's opening text (J, hand-back or notification) + tool inputs + results
   let turnInputs = '' // tool inputs this main turn
   let corpus = '' // earlier turns' corpus (assistant text excluded), capped
+  let agentLaunches: string[] = [] // 0.6.21 auto-evidence: this chat's Agent launches (description + model)
+  let turnSends: string[] = [] // ... this turn's SendMessage texts and memory write strings
   let sentText: string[] = [] // SendUserMessage texts this main turn (J-facing too)
   // 0.6.8 per session id: whether artifacts were listed / reuse-first fired.
   const listedBy = new Set<string>()
@@ -1698,10 +1710,16 @@ export const register: Register = on => {
   let hadLeap = false // an earlier text this turn (passed by check_reply or sent) already carried a Leap line
   let hadEff = false // ... an Efficiency line (set only by a delivered SendUserMessage or a final text that matched a PASS)
   const markLines = (t: string): void => { if (rx('leap-line', 'leap').test(t)) hadLeap = true; if (EFF_LINE.test(t)) hadEff = true }
+  let savePass = false // 0.6.21: a check_reply PASS happened this turn (rule saves wait for it)
   const finalPassed = new Set<string>() // hashes check_reply passed this turn: the final reply should be one of them
   const passed = new Map<string, string>() // 0.6.16: hashes of drafts check_reply passed -> note (sent-with-open-problems), consumed by the matching SendUserMessage
-  const facts = (): DeepFacts => ({ asked, corpus: `${corpus} ${turnCorpus}`, looked, anyTool, jTurn, acted: acted || landed || wrote, landed, saved: savedWide, askTool, wrote, hadLeap, hadEff })
+  const facts = (): DeepFacts => ({ asked, corpus: `${corpus} ${turnCorpus}`, looked, anyTool, jTurn, acted: acted || landed || wrote, landed, saved: savedWide, askTool, wrote, hadLeap, hadEff, launch: proof })
   const capNote = (probs: Problem[], c = denyCap()): string => `Deep mode: sent after ${c} failed checks with open problems (${probs.map(x => x.text).join('; ')}).`
+  // 0.6.21: the judge also sees what SendUserMessage already told J this turn, so a final reply is not failed for 'not answering' a question a mid-turn message answered.
+  const sentEvidence = (ev: string): string => {
+    const auto = [...agentLaunches.slice(-15).map(a => `launched ${a}`), ...turnSends.slice(-15)]
+    return `${ev}${sentText.length === 0 ? '' : `\nAlready sent to J this turn: ${sentText.join('\n---\n')}`}${auto.length === 0 ? '' : `\nAuto-evidence: ${auto.join('; ')}`}`.slice(-20_000)
+  }
   const numbered = (probs: Problem[]): string => probs.map((x, i) => `${i + 1}) ${x.text}`).join(' ')
 
   // 0.6.16: the pre-send check as a tool, so a bad draft never reaches a message row J can see.
@@ -1854,7 +1872,9 @@ export const register: Register = on => {
       turnInputs = ''
       turnResults = ''
       sentText = []
+      turnSends = []
       finalPassed.clear()
+      savePass = false
       hadLeap = false
       hadEff = false
       webText = ''
@@ -1911,13 +1931,14 @@ export const register: Register = on => {
         }
       }
       const pre: Problem[] = sg.length > 0 ? [{ id: SOURCE_GATE_ID, text: `cite a source in evidence or label it (inferred / estimate / unverified / requested / planned): ${sg.slice(0, 3).join(' | ')}` }] : []
-      const jr = sg.length > 0 || skipJudge(text, f.asked || String(x.ask ?? '')) ? undefined : await judgeReply($, text, f.asked || String(x.ask ?? '').trim(), String(x.evidence ?? ''), turnResults, f)
+      const jr = sg.length > 0 || skipJudge(text, f.asked || String(x.ask ?? '')) ? undefined : await judgeReply($, text, f.asked || String(x.ask ?? '').trim(), sentEvidence(String(x.evidence ?? '')), turnResults, f)
       const g = await deepGate($, text, f, denied, epoch, jr === undefined || jr.status === 'unavailable' ? undefined : { problems: jr.problems.map(t => ({ id: 'judge', text: `judge: ${t}` })) }, atCap && jr === undefined, pre, mc)
       denied = g.denied
       if (g.probs.length > 0 && !g.capped) return { result: `Deep mode: fix these, then call check_reply again (${g.denied}/${cap}): ${numbered(g.probs)}` }
       const holdNote = atCap && jr === undefined && !g.capped ? `Deep mode: sent at the ${cap}-failure cap; the judge was skipped for this draft.` : ''
       passed.set(replyHash(text), g.capped ? capNote(g.probs, cap) : holdNote)
       finalPassed.add(replyHash(text))
+      savePass = true
       if (passed.size > 50) passed.delete(passed.keys().next().value!)
       const midTag = mc === undefined || !g.capped ? '' : ' (mid-turn reply: one check round only; tag these open problems in the reply, then send it)'
       return { result: `PASS ${replyHash(text)}${holdNote !== '' ? ` (note: ${cap} failed checks this prompt, judge skipped at the cap)` : ''}${g.capped ? ` (note: ${cap} failed checks, open problems: ${g.probs.map(x => x.text).join('; ')})${midTag}` : ''}` }
@@ -1964,6 +1985,13 @@ export const register: Register = on => {
     if (e.tool === 'SendUserMessage' && !foldFired && sendable) {
       const late = midQ.filter(m => m.seq > seenSeq && m.gap <= num('mid-turn', 'burstSeconds') * 1000)
       if (late.length > 0) { foldFired = true; return { deny: msg('mid-turn', 'fold', { n: late.length, secs: num('mid-turn', 'burstSeconds'), list: midList(late) }) } }
+    }
+    // 0.6.21 save-gate: a rule save waits for a check_reply PASS earlier in the same turn. Dark (log-only) unless save-gate.enforce is 2.
+    // Main thread, deep mode only. Exempt: /areas/handoffs/ memory paths (bookkeeping) and every other tool (ArtifactData etc. never match SAVE_TOOL).
+    if (e.agentId === undefined && SAVE_TOOL.test(e.tool) && !savePass && sendOk && !handoffPath((e as Record<string, unknown>).path) && num('save-gate', 'enforce') > 0 && (await readMode($, mode)) === 'deep') {
+      const live2 = num('save-gate', 'enforce') >= 2
+      await Promise.resolve().then(async () => { const log = await $.store.get(DENY_LOG_KEY); await $.store.set(DENY_LOG_KEY, [...(Array.isArray(log) ? log : []), { time: sgtIso(await nowMs($)), session: await $.session.id(), n: 0, ...(live2 ? {} : { dark: true }), checks: ['save-gate'] }].slice(-500)) }).catch(() => undefined)
+      if (live2) return { deny: msg('save-gate') }
     }
     const notes: string[] = []
     if (packMsg !== undefined) notes.push(packMsg)
@@ -2045,6 +2073,12 @@ export const register: Register = on => {
       }
     }
     if (turnInputs.length < 400_000) turnInputs += ` ${JSON.stringify(e)}`
+    if (e.agentId === undefined) { // 0.6.21 auto-evidence digest for the judge (each field cut to 300 chars)
+      const x = e as Record<string, unknown>, cut = (v: unknown): string => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, 300)
+      if (AGENT_TOOLS.has(e.tool)) { agentLaunches.push(`${cut(x.description)} (model ${cut(x.model) || 'default'})`); if (agentLaunches.length > 20) agentLaunches.shift() }
+      else if (e.tool === 'SendMessage') turnSends.push(`SendMessage: ${cut(x.message)}`)
+      else if (SAVE_TOOL.test(e.tool) && !/propose_skills$/.test(e.tool)) turnSends.push(`${e.tool.replace(/^.*__/, '')} ${cut(x.path)}: ${x.old_str !== undefined || x.new_str !== undefined ? `old "${cut(x.old_str)}" -> new "${cut(x.new_str)}"` : cut(x.content ?? x.text)}`)
+    }
     if (WRITE_TOOLS.has(e.tool)) acted = true
     if (e.agentId === undefined && savesClaudeWide(e as unknown as Record<string, unknown>)) savedWide = true
     if (WRITE_TOOLS.has(e.tool) || LANDING_TOOL.test(e.tool)) landed = true
@@ -2144,6 +2178,7 @@ export const register: Register = on => {
     // miss-landing wins over parked-fix: a turn gets at most one of the two lines.
     if (!skipDeep && missUnlanded(e.answer, proof || landed)) line = msg('miss-landing')
     else if (line === undefined && !skipDeep && live('parked-fix') && parkedFix(e.answer, proof || acted)) line = msg('parked-fix')
+    else if (line === undefined && !skipDeep && efficiencyFix(e.answer, proof || acted || landed || wrote)) line = msg('parked-fix')
     let continued = false
     if (line === msg('idle-guard')) {
       idleFired = true
@@ -2155,6 +2190,12 @@ export const register: Register = on => {
       }
     }
     const extra: string[] = []
+    // 0.6.21 save-gate (reply half): a deep-mode final reply long enough to need check_reply that no PASS matched. Logged dark; one short carry line only when live.
+    if (isDeep && !skipDeep && !skipJudge(String(e.answer ?? ''), asked) && num('save-gate', 'enforce') > 0) {
+      const live2 = num('save-gate', 'enforce') >= 2
+      await Promise.resolve().then(async () => { const log = await $.store.get(DENY_LOG_KEY); await $.store.set(DENY_LOG_KEY, [...(Array.isArray(log) ? log : []), { time: sgtIso(await nowMs($)), session: await $.session.id(), n: 0, ...(live2 ? {} : { dark: true }), checks: ['unchecked-reply'] }].slice(-500)) }).catch(() => undefined)
+      if (live2) extra.push(msg('save-gate', 'miss'))
+    }
     if (!skipDeep && line !== msg('idle-guard') && offers(e.answer, askTool)) extra.push(msg('offer-guard'))
     const [n, m] = live('verify-proof') ? unverified(e.answer) : [0, 0]
     if (n + m > 0) extra.push(verifyMsg(n, m))
@@ -2170,7 +2211,7 @@ export const register: Register = on => {
     }
     if (yesNoQuestion(asked) && !answersFirst(e.answer)) extra.push(msg('answer-first'))
     if (live('lookup-first') && !looked && unknowns(e.answer)) extra.push(msg('lookup-first'))
-    if (rawEta(e.answer)) extra.push(msg('eta-proof'))
+    if (rawEta([...sentText, e.answer].join('\n\n'))) extra.push(msg('eta-proof')) // 0.6.21: SendUserMessage texts count too
     if (missingChecked(asked, e.answer)) extra.push(msg('checked-line'))
     if (!skipDeep && !anyTool && openQuestions(e.answer, asked).length > 0) extra.push(msg('open-question'))
     if (!skipDeep && !looked && absoluteClaims(e.answer, asked).length > 0) extra.push(msg('unbacked-absolute')) // 0.6.11: no lookup tool this turn
