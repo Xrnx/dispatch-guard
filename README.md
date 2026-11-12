@@ -148,6 +148,8 @@ Publish: `tools/rulepack-publish.sh --init pack.json` (writes the bundled rules 
 
 ### Code release (upload)
 
+Every version bump adds its CHANGELOG.md line in the same commit.
+
 Bump `.claude-plugin/plugin.json`, run `claude plugin test .` and `claude plugin validate .`, zip, J uploads. Bump `BUNDLED_VERSION` when the bundled rules change, so an older published pack stops overriding them. Once org sync is set up (claude.ai Organization settings > Plugins & skills > Sync from GitHub, private repo, default branch `stable`), `tools/promote.sh <release-remote> stable` replaces the upload: it refuses a dirty tree and pushes only when the suite passes.
 
 ## Install

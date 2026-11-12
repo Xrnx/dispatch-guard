@@ -1441,7 +1441,7 @@ export async function judgeReply($: EngineInterface, text: string, ask: string, 
       const base = tot?.date === date ? tot : { calls: 0, input: 0, output: 0, cache: 0 }
       await $.store.set(JUDGE_TOKENS_KEY, { date, calls: (base.calls ?? 0) + 1, input: (base.input ?? 0) + tk.input, output: (base.output ?? 0) + tk.output, cache: (base.cache ?? 0) + tk.cache })
     }).catch(() => undefined)
-    await statsJudge($, status, tk).catch(() => undefined)
+    await statsJudge($, status, tk, ms).catch(() => undefined)
     if (status === 'unavailable') await Promise.resolve().then(async () => {
       const log = await $.store.get(DENY_LOG_KEY)
       await $.store.set(DENY_LOG_KEY, [...(Array.isArray(log) ? log : []), { time: sgtIso(await nowMs($)), session: await $.session.id(), n: 0, judge: 'unavailable', checks: [] }].slice(-500))
@@ -1508,9 +1508,10 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.23'
-type Stats = { date: string; prompts: number; firstPass: number; rounds: number; unchecked: number; jc: number; jok: number; jun: number; tin: number; tout: number; tcache: number; epoch?: string; eRounds: number; eFail: boolean; closed?: string; fc: Record<string, number>; dh: Record<string, number>; ds: Record<string, string[]> }
-export type StatsRow = { source: 'deep-stats'; date: string; session: string; plugin_version: string; prompts_judged: number; first_draft_pass: number; unchecked: number; rounds_total: number; judge_calls: number; judge_ok: number; judge_unavailable: number; tokens_in: number; tokens_out: number; tokens_cache: number; fail_checks: Record<string, number>; dark_hits: Record<string, number>; dark_samples: Record<string, string[]> }
+export const PLUGIN_VERSION = '0.6.24'
+type Stats = { date: string; prompts: number; firstPass: number; rounds: number; unchecked: number; jc: number; jok: number; jun: number; tin: number; tout: number; tcache: number; epoch?: string; eRounds: number; eFail: boolean; closed?: string; fc: Record<string, number>; dh: Record<string, number>; ds: Record<string, string[]>; tms: number; tn: number; tmax: number; jms: number; crms: number; eT0?: number; eT1?: number }
+export type StatsRow = { source: 'deep-stats'; date: string; session: string; plugin_version: string; prompts_judged: number; first_draft_pass: number; unchecked: number; rounds_total: number; judge_calls: number; judge_ok: number; judge_unavailable: number; tokens_in: number; tokens_out: number; tokens_cache: number; fail_checks: Record<string, number>; dark_hits: Record<string, number>; dark_samples: Record<string, string[]>; turn_ms_total: number; turn_count: number; turn_ms_max: number; judge_ms_total: number; checker_rounds_ms_total: number }
+// 0.6.24 speed meter: wall ms turn.start -> turn.complete of deep J-prompt turns (total, count, max), judge call ms, and checker rounds ms (first to last check_reply round end, per prompt; a one-round prompt adds 0). Counts only.
 // 0.6.23: dark-check would-be hits per id (dark_hits) and the last 3 snippets each (dark_samples, whole field <= 3000 chars), so a reviewer can tell real misses from false alarms. Snippets are reply text or the check's own message only.
 export const DARK_SAMPLES_CAP = 3000
 const trimSamples = (ds: Record<string, string[]>): Record<string, string[]> => {
@@ -1527,7 +1528,7 @@ const readStats = async ($: EngineInterface, sid: string, date: string): Promise
   const v = await Promise.resolve().then(() => $.store.get(`${STATS_KEY}:${sid}`)).catch(() => undefined) as Partial<Stats> | undefined
   const fresh = v?.date === date
   const n = (x: unknown): number => (fresh ? Number(x) || 0 : 0)
-  return { date, prompts: n(v?.prompts), firstPass: n(v?.firstPass), rounds: n(v?.rounds), unchecked: n(v?.unchecked), jc: n(v?.jc), jok: n(v?.jok), jun: n(v?.jun), tin: n(v?.tin), tout: n(v?.tout), tcache: n(v?.tcache), epoch: v?.epoch, eRounds: Number(v?.eRounds) || 0, eFail: v?.eFail === true, closed: v?.closed, fc: fresh && v?.fc && typeof v.fc === 'object' ? Object.fromEntries(Object.entries(v.fc).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {}, dh: fresh && v?.dh && typeof v.dh === 'object' ? Object.fromEntries(Object.entries(v.dh).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {}, ds: fresh && v?.ds && typeof v.ds === 'object' ? Object.fromEntries(Object.entries(v.ds).map(([k, a]) => [k, Array.isArray(a) ? a.map(x => String(x).slice(0, 160)) : []])) : {} }
+  return { date, prompts: n(v?.prompts), firstPass: n(v?.firstPass), rounds: n(v?.rounds), unchecked: n(v?.unchecked), jc: n(v?.jc), jok: n(v?.jok), jun: n(v?.jun), tin: n(v?.tin), tout: n(v?.tout), tcache: n(v?.tcache), epoch: v?.epoch, eRounds: Number(v?.eRounds) || 0, eFail: v?.eFail === true, closed: v?.closed, tms: n(v?.tms), tn: n(v?.tn), tmax: n(v?.tmax), jms: n(v?.jms), crms: n(v?.crms), eT0: Number(v?.eT0) || undefined, eT1: Number(v?.eT1) || undefined, fc: fresh && v?.fc && typeof v.fc === 'object' ? Object.fromEntries(Object.entries(v.fc).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {}, dh: fresh && v?.dh && typeof v.dh === 'object' ? Object.fromEntries(Object.entries(v.dh).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {}, ds: fresh && v?.ds && typeof v.ds === 'object' ? Object.fromEntries(Object.entries(v.ds).map(([k, a]) => [k, Array.isArray(a) ? a.map(x => String(x).slice(0, 160)) : []])) : {} }
 }
 // One or more dark would-be hits ({id, snip}); live checks never reach here. Refreshes today's row when it already exists.
 export async function statsDark($: EngineInterface, hits: { id: string; snip?: string }[]): Promise<void> {
@@ -1546,19 +1547,19 @@ export async function statsDark($: EngineInterface, hits: { id: string; snip?: s
 }
 async function statsRound($: EngineInterface, epoch: string | number, failed: boolean, ids: string[] = []): Promise<void> {
   const sid = String(await $.session.id()), date = sgtIso(await nowMs($)).slice(0, 10), st = await readStats($, sid, date), e = String(epoch)
-  const same = st.epoch === e
-  await $.store.set(`${STATS_KEY}:${sid}`, { ...st, rounds: st.rounds + 1, epoch: e, eRounds: (same ? st.eRounds : 0) + 1, eFail: (same && st.eFail) || failed, fc: failed ? ids.reduce((a, id) => ({ ...a, [id]: (a[id] ?? 0) + 1 }), { ...st.fc }) : st.fc })
+  const same = st.epoch === e, at = await nowMs($)
+  await $.store.set(`${STATS_KEY}:${sid}`, { ...st, eT0: same && st.eT0 !== undefined ? st.eT0 : at, eT1: at, rounds: st.rounds + 1, epoch: e, eRounds: (same ? st.eRounds : 0) + 1, eFail: (same && st.eFail) || failed, fc: failed ? ids.reduce((a, id) => ({ ...a, [id]: (a[id] ?? 0) + 1 }), { ...st.fc }) : st.fc })
 }
 export const statsRow = (sid: string, date: string, st: Stats): StatsRow => ({ source: 'deep-stats', date, session: sid, plugin_version: PLUGIN_VERSION, prompts_judged: st.prompts, first_draft_pass: st.firstPass, unchecked: st.unchecked, rounds_total: st.rounds,
-  judge_calls: st.jc, judge_ok: st.jok, judge_unavailable: st.jun, tokens_in: st.tin, tokens_out: st.tout, tokens_cache: st.tcache, fail_checks: { ...st.fc }, dark_hits: { ...st.dh }, dark_samples: trimSamples(st.ds) })
+  judge_calls: st.jc, judge_ok: st.jok, judge_unavailable: st.jun, tokens_in: st.tin, tokens_out: st.tout, tokens_cache: st.tcache, fail_checks: { ...st.fc }, dark_hits: { ...st.dh }, dark_samples: trimSamples(st.ds), turn_ms_total: st.tms, turn_count: st.tn, turn_ms_max: st.tmax, judge_ms_total: st.jms, checker_rounds_ms_total: st.crms })
 // One judge call: running per-session/day totals (never re-summed from the shared judgeLog).
-export async function statsJudge($: EngineInterface, status: string, tk: { input: number; output: number; cache: number }): Promise<void> {
+export async function statsJudge($: EngineInterface, status: string, tk: { input: number; output: number; cache: number }, ms = 0): Promise<void> {
   const sid = String(await $.session.id()), date = sgtIso(await nowMs($)).slice(0, 10), st = await readStats($, sid, date)
-  await $.store.set(`${STATS_KEY}:${sid}`, { ...st, jc: st.jc + 1, jok: st.jok + (status === 'unavailable' ? 0 : 1), jun: st.jun + (status === 'unavailable' ? 1 : 0), tin: st.tin + tk.input, tout: st.tout + tk.output, tcache: st.tcache + tk.cache })
+  await $.store.set(`${STATS_KEY}:${sid}`, { ...st, jc: st.jc + 1, jok: st.jok + (status === 'unavailable' ? 0 : 1), jun: st.jun + (status === 'unavailable' ? 1 : 0), tin: st.tin + tk.input, tout: st.tout + tk.output, tcache: st.tcache + tk.cache, jms: st.jms + (Number.isFinite(ms) && ms > 0 ? Math.round(ms) : 0) })
 }
 // End of a deep J-prompt turn (also when the reply went out only via SendUserMessage: final text empty). `reply`: 'short' = exempt from check_reply,
 // 'unchecked' = long final text that never went through check_reply, 'none' = no final text. A checked prompt (eRounds > 0) is counted from the epoch rounds.
-export async function statsTurnEnd($: EngineInterface, epoch: string | number, reply: 'short' | 'unchecked' | 'none'): Promise<void> {
+export async function statsTurnEnd($: EngineInterface, epoch: string | number, reply: 'short' | 'unchecked' | 'none', turnMs = 0): Promise<void> {
   try {
     const sid = String(await $.session.id()), date = sgtIso(await nowMs($)).slice(0, 10), st = await readStats($, sid, date), e = String(epoch)
     if (st.closed === e) return // one count per prompt
@@ -1569,6 +1570,9 @@ export async function statsTurnEnd($: EngineInterface, epoch: string | number, r
     }
     if (reply === 'unchecked') st.unchecked += 1
     st.closed = e
+    const tm = Number.isFinite(turnMs) && turnMs > 0 ? Math.round(turnMs) : 0
+    st.tms += tm; st.tn += 1; st.tmax = Math.max(st.tmax, tm)
+    if (st.epoch === e && st.eT0 !== undefined && st.eT1 !== undefined) st.crms += Math.max(0, st.eT1 - st.eT0)
     await $.store.set(`${STATS_KEY}:${sid}`, st)
     if (st.prompts + st.unchecked === 0) return
     await upsertRows($, [{ id: `deepstats-${sid}-${date}`, data: statsRow(sid, date, st) }])
@@ -1692,6 +1696,7 @@ export const register: Register = on => {
   let anyTool = false // 0.6.11: any main-turn tool call ran
   let finishedNote = false // this main turn opened on a completed task-notification
   let boardRow = false // a status-board ArtifactData write ran this main turn
+  let turnT0 = 0 // clock ms at the main turn's turn.start (speed meter)
   let inTurn = false // a main turn is running (turn.start → turn.complete)
   let jTurn = false // this main turn was opened by J's own message (not an agent, notification or the guard)
   let replied = false // a SendUserMessage went out this main turn
@@ -1714,7 +1719,7 @@ export const register: Register = on => {
   let turnInputs = '' // tool inputs this main turn
   let corpus = '' // earlier turns' corpus (assistant text excluded), capped
   let agentLaunches: string[] = [] // 0.6.21 auto-evidence: this chat's Agent launches (description + model)
-  let turnActs: string[] = [] // 0.6.22: every non-read-only tool call this turn: name + input + ok/error + result start
+  let turnActs: string[] = [] // 0.6.22/0.6.24: rolling last 30 non-read-only tool calls across turns (this chat): SGT time + name + input + ok/error + result start
   let turnSends: string[] = [] // ... this turn's SendMessage texts and memory write strings
   let sentText: string[] = [] // SendUserMessage texts this main turn (J-facing too)
   // 0.6.8 per session id: whether artifacts were listed / reuse-first fired.
@@ -1888,6 +1893,7 @@ export const register: Register = on => {
       looked = false
       anyTool = false
       inTurn = true
+      turnT0 = await nowMs($)
       replied = false
       firstFired = false
       midPending = false
@@ -1904,7 +1910,6 @@ export const register: Register = on => {
       turnResults = ''
       sentText = []
       turnSends = []
-      turnActs = []
       finalPassed.clear()
       savePass = false
       hadLeap = false
@@ -2121,14 +2126,15 @@ export const register: Register = on => {
     if (e.agentId === undefined) { const cn = await takeCompactNote($); if (cn !== undefined) notes.push(cn) }
     const startedAt = timed ? await nowMs($) : 0
     const ran = await next(e)
+    const endedAt = timed ? await nowMs($) : 0
     if (e.agentId === undefined && !READ_ONLY_TOOL.test(e.tool) && e.tool !== CHECK_TOOL && e.tool !== 'SendUserMessage') { // 0.6.22 generic auto-evidence (a denied or errored call counts: a later retry that succeeded is visible)
       const { tool: _t, agentId: _a, tool_use_id: _u, ...inp } = e as Record<string, unknown>
       const rs = String(ran.deny !== undefined ? ran.deny : ran.text ?? (typeof ran.result === 'string' ? ran.result : JSON.stringify(ran.result ?? ''))).replace(/\s+/g, ' ').trim().slice(0, 200)
-      turnActs.push(`${e.tool.replace(/^.*__/, '')} ${JSON.stringify(inp).slice(0, 200)} -> ${ran.deny !== undefined ? 'denied' : ran.isError ? 'errored' : 'ok'}: ${rs}`)
-      if (turnActs.length > 60) turnActs.shift()
+      turnActs.push(`[${sgtIso(await nowMs($)).slice(5, 16)}] ${e.tool.replace(/^.*__/, '')} ${JSON.stringify(inp).slice(0, 200)} -> ${ran.deny !== undefined ? 'denied' : ran.isError ? 'errored' : 'ok'}: ${rs}`)
+      if (turnActs.length > 30) turnActs.shift()
     }
     if (timed) {
-      const took = (await nowMs($) - startedAt) / 1000
+      const took = (endedAt - startedAt) / 1000
       if (took >= num('long-bash', 'maxSeconds')) notes.push(msg('long-bash', 'took', { n: Math.round(took) }))
     }
     if (resend && ran.deny === undefined && !ran.isError) await resend.commit()
@@ -2213,7 +2219,7 @@ export const register: Register = on => {
         await $.store.set(DENY_LOG_KEY, [...(Array.isArray(log) ? log : []), { time: sgtIso(await nowMs($)), session: await $.session.id(), n: 0, final: skipJudge(String(e.answer ?? ''), asked) ? 'short' : 'unchecked', checks: [] }].slice(-500))
       }).catch(() => undefined)
     }
-    if (jTurn && sendOk && (await readMode($, mode)) === 'deep') await statsTurnEnd($, epoch, !finalText ? 'none' : skipJudge(String(e.answer ?? ''), asked) ? 'short' : skipDeep ? 'none' : 'unchecked')
+    if (jTurn && sendOk && (await readMode($, mode)) === 'deep') await statsTurnEnd($, epoch, !finalText ? 'none' : skipJudge(String(e.answer ?? ''), asked) ? 'short' : skipDeep ? 'none' : 'unchecked', turnT0 > 0 ? await nowMs($) - turnT0 : 0)
     let line: string | undefined
     if (rx('running-proof','claim').test(e.answer) && unproven(e.answer, proof || (await openCount($)) > 0)) line = msg('running-proof')
     else if (!idleFired && idleClaim(e.answer)) line = msg('idle-guard')
