@@ -1508,14 +1508,41 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.22'
-type Stats = { date: string; prompts: number; firstPass: number; rounds: number; unchecked: number; jc: number; jok: number; jun: number; tin: number; tout: number; tcache: number; epoch?: string; eRounds: number; eFail: boolean; closed?: string; fc: Record<string, number> }
-export type StatsRow = { source: 'deep-stats'; date: string; session: string; plugin_version: string; prompts_judged: number; first_draft_pass: number; unchecked: number; rounds_total: number; judge_calls: number; judge_ok: number; judge_unavailable: number; tokens_in: number; tokens_out: number; tokens_cache: number; fail_checks: Record<string, number> }
+export const PLUGIN_VERSION = '0.6.23'
+type Stats = { date: string; prompts: number; firstPass: number; rounds: number; unchecked: number; jc: number; jok: number; jun: number; tin: number; tout: number; tcache: number; epoch?: string; eRounds: number; eFail: boolean; closed?: string; fc: Record<string, number>; dh: Record<string, number>; ds: Record<string, string[]> }
+export type StatsRow = { source: 'deep-stats'; date: string; session: string; plugin_version: string; prompts_judged: number; first_draft_pass: number; unchecked: number; rounds_total: number; judge_calls: number; judge_ok: number; judge_unavailable: number; tokens_in: number; tokens_out: number; tokens_cache: number; fail_checks: Record<string, number>; dark_hits: Record<string, number>; dark_samples: Record<string, string[]> }
+// 0.6.23: dark-check would-be hits per id (dark_hits) and the last 3 snippets each (dark_samples, whole field <= 3000 chars), so a reviewer can tell real misses from false alarms. Snippets are reply text or the check's own message only.
+export const DARK_SAMPLES_CAP = 3000
+const trimSamples = (ds: Record<string, string[]>): Record<string, string[]> => {
+  const o: Record<string, string[]> = Object.fromEntries(Object.entries(ds).map(([k, v]) => [k, v.slice(-3)]))
+  while (JSON.stringify(o).length > DARK_SAMPLES_CAP) {
+    const big = Object.keys(o).sort((a, b) => o[b].length - o[a].length || b.length - a.length)[0]
+    if (big === undefined) break
+    if (o[big].length > 1) o[big] = o[big].slice(1)
+    else delete o[big]
+  }
+  return o
+}
 const readStats = async ($: EngineInterface, sid: string, date: string): Promise<Stats> => {
   const v = await Promise.resolve().then(() => $.store.get(`${STATS_KEY}:${sid}`)).catch(() => undefined) as Partial<Stats> | undefined
   const fresh = v?.date === date
   const n = (x: unknown): number => (fresh ? Number(x) || 0 : 0)
-  return { date, prompts: n(v?.prompts), firstPass: n(v?.firstPass), rounds: n(v?.rounds), unchecked: n(v?.unchecked), jc: n(v?.jc), jok: n(v?.jok), jun: n(v?.jun), tin: n(v?.tin), tout: n(v?.tout), tcache: n(v?.tcache), epoch: v?.epoch, eRounds: Number(v?.eRounds) || 0, eFail: v?.eFail === true, closed: v?.closed, fc: fresh && v?.fc && typeof v.fc === 'object' ? Object.fromEntries(Object.entries(v.fc).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {} }
+  return { date, prompts: n(v?.prompts), firstPass: n(v?.firstPass), rounds: n(v?.rounds), unchecked: n(v?.unchecked), jc: n(v?.jc), jok: n(v?.jok), jun: n(v?.jun), tin: n(v?.tin), tout: n(v?.tout), tcache: n(v?.tcache), epoch: v?.epoch, eRounds: Number(v?.eRounds) || 0, eFail: v?.eFail === true, closed: v?.closed, fc: fresh && v?.fc && typeof v.fc === 'object' ? Object.fromEntries(Object.entries(v.fc).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {}, dh: fresh && v?.dh && typeof v.dh === 'object' ? Object.fromEntries(Object.entries(v.dh).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {}, ds: fresh && v?.ds && typeof v.ds === 'object' ? Object.fromEntries(Object.entries(v.ds).map(([k, a]) => [k, Array.isArray(a) ? a.map(x => String(x).slice(0, 160)) : []])) : {} }
+}
+// One or more dark would-be hits ({id, snip}); live checks never reach here. Refreshes today's row when it already exists.
+export async function statsDark($: EngineInterface, hits: { id: string; snip?: string }[]): Promise<void> {
+  if (hits.length === 0) return
+  try {
+    const sid = String(await $.session.id()), date = sgtIso(await nowMs($)).slice(0, 10), st = await readStats($, sid, date)
+    for (const h of hits) {
+      st.dh[h.id] = (st.dh[h.id] ?? 0) + 1
+      const snip = String(h.snip ?? '').replace(/\s+/g, ' ').trim().slice(0, 160)
+      st.ds[h.id] = [...(st.ds[h.id] ?? []), ...(snip === '' ? [] : [snip])].slice(-3)
+    }
+    st.ds = trimSamples(st.ds)
+    await $.store.set(`${STATS_KEY}:${sid}`, st)
+    if (st.prompts + st.unchecked > 0) { await upsertRows($, [{ id: `deepstats-${sid}-${date}`, data: statsRow(sid, date, st) }]); await corrFlush($).catch(() => 0) }
+  } catch { /* logging never affects a turn */ }
 }
 async function statsRound($: EngineInterface, epoch: string | number, failed: boolean, ids: string[] = []): Promise<void> {
   const sid = String(await $.session.id()), date = sgtIso(await nowMs($)).slice(0, 10), st = await readStats($, sid, date), e = String(epoch)
@@ -1523,7 +1550,7 @@ async function statsRound($: EngineInterface, epoch: string | number, failed: bo
   await $.store.set(`${STATS_KEY}:${sid}`, { ...st, rounds: st.rounds + 1, epoch: e, eRounds: (same ? st.eRounds : 0) + 1, eFail: (same && st.eFail) || failed, fc: failed ? ids.reduce((a, id) => ({ ...a, [id]: (a[id] ?? 0) + 1 }), { ...st.fc }) : st.fc })
 }
 export const statsRow = (sid: string, date: string, st: Stats): StatsRow => ({ source: 'deep-stats', date, session: sid, plugin_version: PLUGIN_VERSION, prompts_judged: st.prompts, first_draft_pass: st.firstPass, unchecked: st.unchecked, rounds_total: st.rounds,
-  judge_calls: st.jc, judge_ok: st.jok, judge_unavailable: st.jun, tokens_in: st.tin, tokens_out: st.tout, tokens_cache: st.tcache, fail_checks: { ...st.fc } })
+  judge_calls: st.jc, judge_ok: st.jok, judge_unavailable: st.jun, tokens_in: st.tin, tokens_out: st.tout, tokens_cache: st.tcache, fail_checks: { ...st.fc }, dark_hits: { ...st.dh }, dark_samples: trimSamples(st.ds) })
 // One judge call: running per-session/day totals (never re-summed from the shared judgeLog).
 export async function statsJudge($: EngineInterface, status: string, tk: { input: number; output: number; cache: number }): Promise<void> {
   const sid = String(await $.session.id()), date = sgtIso(await nowMs($)).slice(0, 10), st = await readStats($, sid, date)
@@ -1584,6 +1611,7 @@ export async function deepGate($: EngineInterface, said: string, facts: DeepFact
     const log = await $.store.get(DENY_LOG_KEY)
     await $.store.set(DENY_LOG_KEY, [...(Array.isArray(log) ? log : []), { time: sgtIso(await nowMs($)), session: await $.session.id(), n: 0, dark: true, checks: soft.map(x => x.id) }].slice(-500))
   }).catch(() => undefined)
+  await statsDark($, soft.map(x => ({ id: x.id, snip: x.text })))
   const key = await failKey($)
   // 0.6.17 caps: any hard problem fails up to denyCap(); a judge problem tagged (a) contradicted / (b) unsupported claim, or Efficiency-none after such a round, gets one more round.
   const hard = probs.filter(x => x.weak !== true)
@@ -1931,6 +1959,7 @@ export const register: Register = on => {
         sg = sourceGate(text, String(x.evidence ?? ''))
         if (sg.length > 0 && DARK.has(SOURCE_GATE_ID) && gateMode < 2) { // dark: logged as a would-be hit, never denying
           await Promise.resolve().then(async () => { const log = await $.store.get(DENY_LOG_KEY); await $.store.set(DENY_LOG_KEY, [...(Array.isArray(log) ? log : []), { time: sgtIso(await nowMs($)), session: await $.session.id(), n: 0, dark: true, checks: [SOURCE_GATE_ID] }].slice(-500)) }).catch(() => undefined)
+          await statsDark($, [{ id: SOURCE_GATE_ID, snip: sg[0] }])
           sg = []
         }
       }
@@ -1997,6 +2026,7 @@ export const register: Register = on => {
     if (e.agentId === undefined && SAVE_TOOL.test(e.tool) && !savePass && sendOk && !handoffPath((e as Record<string, unknown>).path) && num('save-gate', 'enforce') > 0 && (await readMode($, mode)) === 'deep') {
       const live2 = num('save-gate', 'enforce') >= 2
       await Promise.resolve().then(async () => { const log = await $.store.get(DENY_LOG_KEY); await $.store.set(DENY_LOG_KEY, [...(Array.isArray(log) ? log : []), { time: sgtIso(await nowMs($)), session: await $.session.id(), n: 0, ...(live2 ? {} : { dark: true }), checks: ['save-gate'] }].slice(-500)) }).catch(() => undefined)
+      if (!live2) await statsDark($, [{ id: 'save-gate', snip: 'rule save with no earlier check_reply PASS this turn' }])
       if (live2) return { deny: msg('save-gate') }
     }
     const notes: string[] = []
@@ -2206,6 +2236,7 @@ export const register: Register = on => {
     if (isDeep && !skipDeep && !skipJudge(String(e.answer ?? ''), asked) && num('save-gate', 'enforce') > 0) {
       const live2 = num('save-gate', 'enforce') >= 2
       await Promise.resolve().then(async () => { const log = await $.store.get(DENY_LOG_KEY); await $.store.set(DENY_LOG_KEY, [...(Array.isArray(log) ? log : []), { time: sgtIso(await nowMs($)), session: await $.session.id(), n: 0, ...(live2 ? {} : { dark: true }), checks: ['unchecked-reply'] }].slice(-500)) }).catch(() => undefined)
+      if (!live2) await statsDark($, [{ id: 'unchecked-reply', snip: String(e.answer ?? '').slice(0, 160) }])
       if (live2) extra.push(msg('save-gate', 'miss'))
     }
     if (!skipDeep && line !== msg('idle-guard') && offers(e.answer, askTool)) extra.push(msg('offer-guard'))
@@ -2298,7 +2329,10 @@ export const register: Register = on => {
     firedTurn.clear()
     const facts: TurnFacts = { facing, board: boardRow, write: acted || landed || wrote, launch: proof, guard: fromGuard, answered: true }
     void settle($, facts, refired)
-    if (darkLogged.length > 0) void hookLog($, darkLogged, 1)
+    if (darkLogged.length > 0) {
+      void hookLog($, darkLogged, 1)
+      await statsDark($, darkLogged.map(id => ({ id, snip: id === 'stop-writes' ? writeClaims(said, asked)[0] : id === 'stop-figures' ? unsourcedFigures(said, `${corpus} ${turnCorpus}`, asked).slice(0, 4).join(', ') : 'three or more bullets with a date or amount and no source' })))
+    }
     void hookLog($, endIds, 1) // both join the pending chain now, in this order
     if (all === '') return ran
     if (!continued || all !== msg('idle-guard')) carry = all

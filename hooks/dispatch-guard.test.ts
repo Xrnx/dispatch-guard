@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { CARD } from './orchestrator-card'
 import { validatePack, bundledPackJson, BUNDLED_VERSION, mergePack, bundledRules } from './rulepack'
-import { MISSING_LINE, sessionBlock, SESSION_INDEX_KEY, KEEP_SESSIONS, problemLabel, SET_RULES_TOOL, RULES_KEY, deepLine, setRules, cleanProblem, deepRow, tokensOf, JUDGE_TOKENS_KEY, judgeRules, skipJudge, denyCap, modeCommand, deepProblems, missingEfficiency, deepMissingLeap, replyHash, CHECK_TOOL, MODE_KEY, DENY_LOG_KEY, CAUGHT_KEY, JUDGE_KEY, JUDGE_RULES, parseJudge, DEEP_LINE, DEEP_DARK, CHECK_SPEC, stubOutput, undefinedLabels, questionOnly, redrafts, missingLeap, uncomputed, numbersIn, nonPreventions, startsWork, answersFirst, scopePhrases, asksJ, buriedAsks, promises, parkedFix, foregroundWait, offers, RELAY_AT, longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, jText, reasks, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL, clockStamp, danglingRefs, isJ, knowableAsks, inputAsk, workMade, draftGap, missUnlanded, fixEvidence, settleRow, absoluteClaims, openQuestions, PLUGIN_VERSION, sourceGate, efficiencyFix } from './register'
+import { MISSING_LINE, sessionBlock, SESSION_INDEX_KEY, KEEP_SESSIONS, problemLabel, SET_RULES_TOOL, RULES_KEY, deepLine, setRules, cleanProblem, deepRow, tokensOf, JUDGE_TOKENS_KEY, judgeRules, skipJudge, denyCap, modeCommand, deepProblems, missingEfficiency, deepMissingLeap, replyHash, CHECK_TOOL, MODE_KEY, DENY_LOG_KEY, CAUGHT_KEY, JUDGE_KEY, JUDGE_RULES, parseJudge, DEEP_LINE, DEEP_DARK, CHECK_SPEC, stubOutput, undefinedLabels, questionOnly, redrafts, missingLeap, uncomputed, numbersIn, nonPreventions, startsWork, answersFirst, scopePhrases, asksJ, buriedAsks, promises, parkedFix, foregroundWait, offers, RELAY_AT, longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, jText, reasks, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL, clockStamp, danglingRefs, isJ, knowableAsks, inputAsk, workMade, draftGap, missUnlanded, fixEvidence, settleRow, absoluteClaims, openQuestions, PLUGIN_VERSION, sourceGate, efficiencyFix, STATS_KEY, statsRow, DARK_SAMPLES_CAP } from './register'
 
 const TURN = /4th tool call this turn/
 const BASH = /Foreground Bash builds\/tests\/installs\/clones\/waits/
@@ -3012,7 +3012,7 @@ test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft pas
   expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
   expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 1, judge_ok: 1, judge_unavailable: 0, tokens_in: 100, tokens_out: 20, tokens_cache: 50 })
   expect(Object.values(d.fail_checks).reduce((a: number, b: any) => a + b, 0)).toBeGreaterThanOrEqual(2) // 0.6.22: the two failed BADC rounds are counted by check id
-  expect(PLUGIN_VERSION).toBe('0.6.22')
+  expect(PLUGIN_VERSION).toBe('0.6.23')
 })
 test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
   const { mem } = deepEngine(on, true)
@@ -3052,9 +3052,9 @@ test('0.6.19 deep-stats: the row has only the listed count fields, no draft/prob
   await $.tool.call(chk(CLEAN))
   await $.turn.complete(end('t1', CLEAN))
   const d = statRows(mem)[0].data
-  expect(Object.keys(d).sort()).toEqual(['date', 'fail_checks', 'first_draft_pass', 'judge_calls', 'judge_ok', 'judge_unavailable', 'plugin_version', 'prompts_judged', 'rounds_total', 'session', 'source', 'tokens_cache', 'tokens_in', 'tokens_out', 'unchecked'])
+  expect(Object.keys(d).sort()).toEqual(['dark_hits', 'dark_samples', 'date', 'fail_checks', 'first_draft_pass', 'judge_calls', 'judge_ok', 'judge_unavailable', 'plugin_version', 'prompts_judged', 'rounds_total', 'session', 'source', 'tokens_cache', 'tokens_in', 'tokens_out', 'unchecked'])
   expect(JSON.stringify(statRows(mem))).not.toMatch(/SECRET|Correction|date was wrong/)
-  for (const [k, v] of Object.entries(d)) expect(k === 'fail_checks' ? Object.values(v as object).every(c => typeof c === 'number') : typeof v === 'string' ? v.length < 60 : typeof v === 'number').toBe(true)
+  for (const [k, v] of Object.entries(d)) expect(k === 'fail_checks' || k === 'dark_hits' ? Object.values(v as object).every(c => typeof c === 'number') : k === 'dark_samples' ? typeof v === 'object' : typeof v === 'string' ? v.length < 60 : typeof v === 'number').toBe(true)
 })
 test('0.6.19 deep-stats: judge totals are running per-session counters (unavailable counted apart), not summed from the shared judgeLog', async ($, on) => {
   const { mem, judge, sidBox } = deepEngine(on, true)
@@ -3590,4 +3590,55 @@ test('0.6.22 generic auto-evidence: every non-read-only tool call this turn (nam
   expect(p).not.toContain('q'.repeat(201))
   expect(p).not.toMatch(/Read \{|memory_read \{|check_reply \{|SendUserMessage \{/)
   expect(p).not.toContain('tool_use_id')
+})
+
+const DARKTXT = '- paid S$500 on 3 March 2026\n- paid S$900 on 4 March 2026\n- paid S$700 on 5 March 2026\n**Efficiency:** none\n**Leap:** none'
+const darkTurn = async ($: any, on: any, id: string, text = DARKTXT) => {
+  await $.prompt.submit({ text: `ask ${id}` } as any)
+  await $.turn.start(turn(id))
+  await $.tool.call(chk(text))
+  await $.turn.complete(end(id, text))
+}
+test('0.6.23 dark_hits: a dark check hit accumulates per id with samples; a live check is never counted as dark', async ($, on) => {
+  const { mem } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await darkTurn($, on, 't1')
+  const d1 = statRows(mem)[0].data
+  expect(d1.dark_hits['stop-sources']).toBeGreaterThanOrEqual(1)
+  expect(d1.dark_samples['stop-sources'].length).toBeGreaterThanOrEqual(1)
+  expect(d1.dark_samples['stop-sources'].every((x: string) => x.length <= 160)).toBe(true)
+  const n1 = d1.dark_hits['stop-sources']
+  await darkTurn($, on, 't2')
+  expect(statRows(mem)[0].data.dark_hits['stop-sources']).toBeGreaterThan(n1)
+  // live checks (leap-line) fail rounds but never appear under dark_hits
+  await $.prompt.submit({ text: 'live' } as any)
+  await $.turn.start(turn('t3'))
+  await $.tool.call(chk(ANALYSIS))
+  await $.tool.call(chk(CLEAN))
+  await $.turn.complete(end('t3', CLEAN))
+  const d = statRows(mem)[0].data
+  expect(d.fail_checks['leap-line']).toBeGreaterThanOrEqual(1)
+  expect(d.dark_hits['leap-line']).toBeUndefined()
+  expect(d.dark_samples['leap-line']).toBeUndefined()
+})
+test('0.6.23 dark_samples: last 3 per id, each <= 160 chars, whole field capped at 3000 chars', () => {
+  // statsRow trims via the same helper the writer uses
+  const big: Record<string, string[]> = {}
+  for (let i = 0; i < 40; i++) big[`check-${i}`] = ['a'.repeat(160), 'b'.repeat(160), 'c'.repeat(160), 'd'.repeat(160)]
+  const row = statsRow('s', '2026-11-12', { date: '2026-11-12', prompts: 1, firstPass: 1, rounds: 0, unchecked: 0, jc: 0, jok: 0, jun: 0, tin: 0, tout: 0, tcache: 0, eRounds: 0, eFail: false, fc: {}, dh: { x: 4 }, ds: big } as any)
+  expect(JSON.stringify(row.dark_samples).length).toBeLessThanOrEqual(DARK_SAMPLES_CAP)
+  expect(DARK_SAMPLES_CAP).toBe(3000)
+  for (const v of Object.values(row.dark_samples)) expect(v.length).toBeLessThanOrEqual(3)
+  expect(row.dark_hits).toEqual({ x: 4 })
+})
+test('0.6.23 dark_hits reset on a new SGT day', async ($, on) => {
+  const { mem } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await darkTurn($, on, 't1')
+  const key = Object.keys(mem).find(k => k.startsWith(`${STATS_KEY}:`))!
+  const cur = mem[key] as any
+  expect(cur.dh['stop-sources']).toBeGreaterThanOrEqual(1)
+  mem[key] = { ...cur, date: '2020-01-01' } // yesterday's counters are dropped on the next write
+  await darkTurn($, on, 't2')
+  expect((mem[key] as any).dh['stop-sources']).toBe(1)
 })
