@@ -302,8 +302,33 @@ export const BUNDLED: Record<string, CheckDef> = {
   // and no evidence call ran yet this turn (lookups, Bash, ArtifactData/Artifact reads, memory reads; not check_reply, SendUserMessage, ToolSearch, launches or writes).
   'evidence-first': {
     numbers: { enforce: 2 },
-    patterns: { state: /\bv?\d+\.\d+\.\d+\b|\b(?:installed|uninstalled|loaded|synced|enabled|disabled|deployed|uploaded|in stock|out of stock|still (?:running|open|pending|there)|(?:is|are|was|were|it's|we're|you're) (?:live|on|running|active|available|current|latest|up to date))\b|^\W*(?:yes|no|yep|nope|correct|right)\b/im },
-    messages: { line: 'Evidence first: this draft states current state or answers a correction, and no lookup ran yet this turn. Run the check (read, Bash, ArtifactData get, memory_read), then redraft from its result.' },
+    patterns: { state: /\bv?\d+\.\d+\.\d+\b|\b(?:installed|uninstalled|loaded|synced|enabled|disabled|deployed|uploaded|in stock|out of stock|still (?:running|open|pending|there)|(?:is|are|was|were|it's|we're|you're) (?:live|on|running|active|available|current|latest|up to date))\b|^\W*(?:yes|no|yep|nope|correct|right)\b/im,
+      // W2 claim types (listing priority lives in register.ts LOOKUP_KINDS). Matched per prose line; one line can carry several types.
+      link: /https?:\/\/[^\s)>\]"'`]+/i,
+      path: /(?:^|[\s(`'"])((?:~|\/(?:home|root|tmp|mnt|workspace|Users|var|opt))\/[^\s`'"),;]+)/,
+      version: /\bv?\d+\.\d+\.\d+\b|\b(?:installed|uninstalled|synced|uploaded|upgraded)\b/i,
+      live: /\b(?:is|are|now|went|still|not) (?:live|deployed|published|active|enabled|disabled|loaded)\b|\blive (?:now|since)\b/i,
+      status: /\(running[^)]*\)|\b(?:running|queued|in progress|pending|being (?:built|scored|tested|run)|landed|stalled|still open|due (?:at |about |by )?\d{1,2}:\d{2})\b/i,
+      verified: /\b(?:verified|confirmed|tested|proven)\b/i,
+      done: /\b(?:done|fixed|saved|logged|written|added|updated|shipped|closed|marked|reached)\b/i,
+      figure: /\b\d+(?:\.\d+)?\s?%|\b\d+\s*(?:of|out of)\s*\d+\b|[$€£]\s?\d[\d,.]*|\b\d+(?:\.\d+)?x\b|\b\d+(?:\.\d+)? vs \d/i,
+      coverage: /\b(?:covers?|every|all of|none (?:are|is|of)|nothing (?:is|was|left)|never|always)\b/i,
+      time: /\b(?:[01]?\d|2[0-3]):[0-5]\d\b|\bETA\b|\b(?:about|in|~)\s?\d+\s?(?:min(?:ute)?s?|hours?|h)\b/i },
+    messages: { line: 'Evidence first: this draft states current state or answers a correction, and no lookup ran yet this turn. Run the check (read, Bash, ArtifactData get, memory_read), then redraft from its result.',
+      // W2: claim type → exact lookup, named per unbacked claim in the evidence-first and judge-(b) denials. Kinds the hook can read itself (version, live, time, path) carry its read-only result.
+      head: 'Lookup per claim type: {list}',
+      hook: 'Hook read (read-only, just now; cite it as hook evidence, no extra call needed): {x}',
+      lk_link: 'HTTP status as a browser sees it: curl -sSL -o /dev/null -w "%{http_code}" <url>.',
+      lk_path: 'the file itself: ls -l or Read the path.',
+      lk_version: 'plugin: grep \'"version"\' /root/.claude/plugins/synced/*/*/.claude-plugin/plugin.json; anything else versioned: read the file or artifact that carries the version.',
+      lk_live: 'plugin: the synced plugin.json grep; artifact: Artifact read of its url; job: its board status row.',
+      lk_status: 'agent/job: ArtifactData list, collection "status", on the board https://claude.ai/artifact/1pV8oEewdbsBMqi6EYDAA8 (TaskList for this session\'s own agents).',
+      lk_verified: 'the test run or source that shows it: run the test, or Read/grep the source and cite the line.',
+      lk_done: 'the write\'s own result this turn (Edit/Write/ArtifactData/memory write), else read the file or row back; nothing written: do it now or drop the claim.',
+      lk_figure: 'the file or report the figure came from: Read or grep it and cite the line; a derived figure: compute it in Bash.',
+      lk_coverage: 'list the whole set (ls, grep, ArtifactData list) and say what was and was not covered.',
+      lk_time: 'clock: Bash TZ=Asia/Singapore date; a past event\'s time: the tool result or file that stamped it.',
+      lk_answer: 're-read the source the question or correction is about (file, board row, earlier tool result) and quote it in evidence.' },
   },
   // 0.6.25 closure-line (J, 13 Nov; the deterministic pre-filter of the 00:27 "nothing stated left undone" rule): an Efficiency/Prevention/Correction/Leap line that names a change (`change`) closes only as done + where (`done` + `where`, with a real change
   // this turn or an earlier/already marker) or needs J (`needsJ`). `defer` words (later, queued, handoff, next build) pass only with a job launched this turn named on the line (`running`);

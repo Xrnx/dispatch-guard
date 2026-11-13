@@ -1446,6 +1446,68 @@ export const evidenceFirstHit = (text: string, ask: string): boolean => {
   const t = proseLines(stripCode(text)).filter(l => !/^\s*>/.test(l)).join('\n')
   return rx('evidence-first', 'state').test(t) || (ask.trim() !== '' && (correcting(ask) || reasks(ask) || jCorrection(ask)))
 }
+// W2 (13 Nov): name the exact lookup per unbacked claim, by claim type (rulepack evidence-first patterns + lk_<kind> messages).
+// Advisory only: it never changes whether a draft is refused. Kinds the hook can read itself get resolveLookups' result.
+export const LOOKUP_KINDS = ['link', 'path', 'version', 'live', 'status', 'verified', 'done', 'figure', 'time', 'coverage'] as const
+export type LookupKind = typeof LOOKUP_KINDS[number] | 'answer'
+export type ClaimLookup = { kind: LookupKind; claims: string[]; lookup: string; targets: string[] }
+const clip = (l: string, at: number): string => {
+  const s = l.replace(/\*\*|__|^\s*(?:[-*•]|\d+[.)])\s*/g, '').trim()
+  const i = Math.max(0, Math.min(at - 20, s.length - 70))
+  return `${i > 0 ? '…' : ''}${s.slice(i, i + 70).trim()}${i + 70 < s.length ? '…' : ''}`.replace(/"/g, "'")
+}
+export const claimLookups = (text: string, max = 6): ClaimLookup[] => {
+  const by = new Map<LookupKind, ClaimLookup>()
+  for (const raw of proseLines(text).filter(l => !/^\s*>/.test(l))) {
+    for (const k of LOOKUP_KINDS) {
+      const line = k === 'link' || k === 'path' ? raw : stripCode(raw)
+      const m = rx('evidence-first', k).exec(line)
+      if (m === null) continue
+      const c = by.get(k) ?? { kind: k, claims: [], lookup: msg('evidence-first', `lk_${k}`), targets: [] }
+      const hit = (k === 'path' ? m[1] : m[0]) ?? m[0]
+      if (c.claims.length < 2) c.claims.push(clip(raw, raw.indexOf(hit)))
+      if (k === 'link' || k === 'path') for (const g of line.matchAll(rxg('evidence-first', k))) { const x = (g[1] ?? g[0]).replace(/[.:]+$/, ''); if (c.targets.length < 3 && !c.targets.includes(x)) c.targets.push(x) }
+      by.set(k, c)
+    }
+  }
+  return LOOKUP_KINDS.filter(k => by.has(k)).map(k => by.get(k) as ClaimLookup).slice(0, max)
+}
+// The read-only lookups the hook runs itself on a deny: synced plugin versions (plugin.json), the clock, local file existence. Never network, never a write.
+export async function resolveLookups($: EngineInterface, ls: ClaimLookup[], budget = 1500): Promise<Map<LookupKind, string>> {
+  const out = new Map<LookupKind, string>()
+  const work = (async () => {
+    if (ls.some(l => l.kind === 'version' || l.kind === 'live')) {
+      const v = await syncedVersions($).catch(() => '')
+      if (v !== '') for (const k of ['version', 'live'] as const) if (ls.some(l => l.kind === k)) out.set(k, v)
+    }
+    if (ls.some(l => l.kind === 'time')) out.set('time', `now ${sgtIso(await nowMs($))} (SGT)`)
+    const p = ls.find(l => l.kind === 'path')
+    if (p !== undefined) {
+      const r: string[] = []
+      for (const t of p.targets.filter(x => x.startsWith('/'))) {
+        try { const m = Number((await $.fs.stat(t)).mtimeMs) || 0; r.push(`${t} exists${m > 0 ? `, modified ${sgtIso(m).slice(0, 16)} SGT` : ''}`) } catch { r.push(`${t} not found`) }
+      }
+      if (r.length > 0) out.set('path', r.join('; '))
+    }
+  })()
+  const timer = Promise.resolve().then(() => $.clock.sleep(budget)).catch(() => new Promise<never>(() => {})) // no timer → wait on the local reads alone
+  await Promise.race([work.catch(() => undefined), timer])
+  return out
+}
+export const lookupText = (ls: ClaimLookup[], read: Map<LookupKind, string>, quote = true): string =>
+  msg('evidence-first', 'head', { list: ls.map((l, i) => `${String.fromCharCode(97 + i)}) ${l.kind}${quote && l.claims.length > 0 ? ` (${l.claims.map(c => `"${c}"`).join(', ')})` : ''}: ${l.lookup}${read.has(l.kind) ? ` ${msg('evidence-first', 'hook', { x: read.get(l.kind) as string })}` : ''}`).join(' ') })
+// W2: hook-run read-only lookups land in the session evidence (and, at the call site, this turn's hook evidence), so the judge sees them as tool results, not as the draft's say-so.
+export const lookupRead = (rd: Map<LookupKind, string>): string => [...rd].map(([k, v]) => `${k}: ${v}`).join('; ')
+async function hookLookups($: EngineInterface, mode: ReplyMode | undefined, ls: ClaimLookup[]): Promise<Map<LookupKind, string>> {
+  const rd = await resolveLookups($, ls).catch(() => new Map<LookupKind, string>())
+  if (rd.size > 0) await rec($, mode, 'tool', 'hook-lookup', lookupRead(rd)).catch(() => undefined)
+  return rd
+}
+// Judge problem tagged (b): the claims it quotes, else its whole text.
+export const judgeClaims = (p: string): string => {
+  const q = [...p.matchAll(/"([^"]{3,240})"|“([^”]{3,240})”/g)].map(m => m[1] ?? m[2])
+  return q.length > 0 ? q.join('\n') : p
+}
 export const deepProblems = (text: string, f: DeepFacts): Problem[] => {
   const out: Problem[] = []
   const add = (id: string, t: string): void => { out.push({ id, text: t }) }
@@ -1797,9 +1859,9 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.30'
+export const PLUGIN_VERSION = '0.6.31'
 // 0.6.29 version row: this version's CHANGELOG line (tools/build-zip.sh fails unless CHANGELOG.md has "- <PLUGIN_VERSION>: <CHANGELOG_LINE>").
-export const CHANGELOG_LINE = 'judge rule (d) cross-turn bleed fixed: the judge ask is the J messages since the last final reply (a Stop re-check judges the asks its reply answered); earlier asks show only as context labelled already answered; a stale ask argument from the model no longer overrides; judge-evals gain prompt layouts (gate --layouts 0629,0630) and 4 cases.'
+export const CHANGELOG_LINE = '0.6.30 + 0.6.31 batch: the judge checks only the current ask, earlier asks shown as already answered; missing-lookup denials name the exact lookup per claim type (version, status, figure, time, link), and the hook reads versions, clock and local files itself into the deny text; same drafts still fail first.'
 export const FIX_CATEGORY = 'unchecked reply'
 export const VERSION_ROW_KEY = 'fixesRowVersion' // the last PLUGIN_VERSION whose fixes row was queued
 export const versionRow = (date: string, time: string): { id: string; collection: string; data: Record<string, unknown> } => ({ id: `f-auto-dg${PLUGIN_VERSION.replace(/\./g, '')}`, collection: 'fixes', data: { category: FIX_CATEGORY, date, kind: 'hook', status: 'landed', title: `dispatch-guard ${PLUGIN_VERSION} (auto)`, detail: `dispatch-guard ${PLUGIN_VERSION} first deep turn ${date} ${time} SGT: ${CHANGELOG_LINE}`, plugin_version: PLUGIN_VERSION, auto: true } })
@@ -2348,7 +2410,12 @@ export const register: Register = on => {
           await recordOutcome($, epoch, [{ id: 'evidence-first', text: msg('evidence-first') }], 'fail', 0).catch(() => undefined)
           // 0.6.28: the footer checks run now too, so the redraft fixes them with the lookup instead of failing a round later. Listed only: this refusal's outcome is unchanged.
           const ff = deepProblems(text, facts()).filter(p => FOOTER_IDS.has(p.id) && !logOnly(p.id))
-          return { result: `Deep mode: ${msg('evidence-first')}${ff.length === 0 ? '' : ` Also fix these footer lines in the redraft: ${numbered(ff)}`}` }
+          // W2: name the lookup per claim type; run the read-only ones here so the redraft needs no extra call. The refusal itself is unchanged.
+          const cl = claimLookups(text, 6)
+          const lk = cl.length === 0 || /^\W*(?:yes|no|yep|nope|correct|right)\b/im.test(proseLines(text).join('\n')) ? [...cl, { kind: 'answer' as const, claims: [], lookup: msg('evidence-first', 'lk_answer'), targets: [] }] : cl
+          const rd = await hookLookups($, mode, lk)
+          if (rd.size > 0) turnResults = `${turnResults} [hook-lookup] ${lookupRead(rd)}`.slice(-6000)
+          return { result: `Deep mode: ${msg('evidence-first')} ${lookupText(lk, rd)}${ff.length === 0 ? '' : ` Also fix these footer lines in the redraft: ${numbered(ff)}`}` }
         }
       }
       const mc = midCap() // 0.6.20: a reply to a pending mid-turn message gets mid-turn.rounds failed rounds, no extra round
@@ -2387,7 +2454,14 @@ export const register: Register = on => {
         finalPassed.add(replyHash(text))
         return { result: `PASS ${replyHash(text)} (Stop re-check: footer-line gaps only, logged; J already has the reply. End the turn with no text; send J nothing about it.)` }
       }
-      if (g.probs.length > 0 && !g.capped) return { result: `Deep mode: fix these, then call check_reply again (${g.denied}/${cap}): ${numbered(g.probs)}` }
+      if (g.probs.length > 0 && !g.capped) {
+        // W2: a judge (b) problem (unsupported claim) names the lookup per claim type it quotes, with the hook's read-only result where it has one. Text only: the outcome is unchanged.
+        const per = g.probs.map(p => p.id === 'judge' && /^judge:\s*\(b\)/i.test(p.text) ? claimLookups(judgeClaims(p.text.replace(/^judge:\s*\(b\)\s*/i, '')), 3) : [])
+        const rd = per.some(l => l.length > 0) ? await hookLookups($, mode, per.flat()) : new Map<LookupKind, string>()
+        if (rd.size > 0) turnResults = `${turnResults} [hook-lookup] ${lookupRead(rd)}`.slice(-6000)
+        const shown = g.probs.map((p, i) => { const l = per[i] ?? []; return l.length === 0 ? p : { ...p, text: `${p.text} → ${lookupText(l, rd, false)}` } })
+        return { result: `Deep mode: fix these, then call check_reply again (${g.denied}/${cap}): ${numbered(shown)}` }
+      }
       const holdNote = atCap && jr === undefined && !g.capped ? `Deep mode: sent at the ${cap}-failure cap; the judge was skipped for this draft.` : ''
       passed.set(replyHash(text), g.capped ? capNote(g.probs, cap) : holdNote)
       finalPassed.add(replyHash(text))

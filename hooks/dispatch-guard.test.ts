@@ -3018,7 +3018,7 @@ test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft pas
   expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
   expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 1, judge_ok: 1, judge_unavailable: 0, tokens_in: 100, tokens_out: 20, tokens_cache: 50 })
   expect(Object.values(d.fail_checks).reduce((a: number, b: any) => a + b, 0)).toBeGreaterThanOrEqual(2) // 0.6.22: the two failed BADC rounds are counted by check id
-  expect(PLUGIN_VERSION).toBe('0.6.30')
+  expect(PLUGIN_VERSION).toBe('0.6.31')
 })
 test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
   const { mem } = deepEngine(on, true)
@@ -4260,10 +4260,10 @@ test('0.6.29 fix d: the first deep J turn on a new version queues one Scoreboard
   await $.turn.complete(end('d2', 'Noted.'))
   const rows = ((mem.corrLog as any[]) ?? []).filter(r => r.collection === 'fixes')
   expect(rows.length).toBe(1)
-  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0630', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.30' } })
+  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0631', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.31' } })
   expect(rows[0].data.detail).toContain(CHANGELOG_LINE)
-  expect(mem[VERSION_ROW_KEY]).toBe('0.6.30')
-  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.30 (auto)')
+  expect(mem[VERSION_ROW_KEY]).toBe('0.6.31')
+  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.31 (auto)')
 })
 
 // 0.6.30 cross-turn bleed (live 13 Nov 12:37-12:39 SGT): rule (d) cited "Are you done with all fixes?" (12:35, answered) against later asks.
@@ -4319,4 +4319,42 @@ test('0.6.30 Stop re-check judges the asks its reply answered; a J message sent 
   await $.tool.call(chk(`${LONGW} next`, { ask: 'stale', evidence: 'EV' }))
   expect(askOf(judge).startsWith('is it too big in filesize now?')).toBe(true)
   expect(askOf(judge)).toContain('"how should I plan my workday"')
+})
+
+// ---- W2: the evidence-first and judge-(b) denials name the lookup per claim type; the hook runs the read-only ones ----
+const W2_SR = '/root/.claude/plugins/synced'
+const w2Fs = (on: any) => {
+  const enoent = () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) }
+  const pj = `${W2_SR}/plug_1/dispatch-guard/.claude-plugin/plugin.json`
+  on('fs.list', (_$: any, e: any) => ({ value: e.path === W2_SR ? [{ name: 'plug_1' }] : e.path === `${W2_SR}/plug_1` ? [{ name: 'dispatch-guard' }] : enoent() }))
+  on('fs.read', (_$: any, e: any) => ({ value: e.path === pj ? '{"version":"0.6.29"}' : enoent() }))
+  on('fs.stat', (_$: any, e: any) => ({ value: e.path === pj ? { kind: 'file', size: 1, mtimeMs: Date.parse('2026-11-13T13:10:00+08:00'), isLink: false } : enoent() }))
+}
+const W2_D49 = "Confirmed: 0.6.29 is now installed. I've marked it live on the Scoreboard and closed its upload card on the board." // live 13 Nov 13:17 SGT
+
+test('W2 evidence-first: same refusal, now naming the lookup per claim type with the hook-read plugin version; the judge of the redraft sees it as hook evidence', async ($, on) => {
+  const { judge } = deepEngine(on, false)
+  w2Fs(on)
+  await jTurnStart($, 'Did you install 0.6.29?', 'w2a')
+  const r1 = String(((await $.tool.call(chk(W2_D49, { ask: 'Did you install 0.6.29?' }))) as any).result)
+  expect(r1).toMatch(EF) // unchanged: still refused first time
+  expect(r1).toMatch(/Lookup per claim type: a\) version \("Confirmed: 0\.6\.29 is now installed/)
+  expect(r1).toMatch(/Hook read \(read-only[^)]*\): synced: dispatch-guard 0\.6\.29 \(13:10\)/)
+  expect(r1).toMatch(/done \([^)]*\): the write's own result this turn/)
+  expect(r1).not.toMatch(/answer: re-read the source/) // the answer row comes only with an opening yes/no or no typed claim
+  const r2 = String(((await $.tool.call(chk(W2_D49, { ask: 'Did you install 0.6.29?' }))) as any).result)
+  expect(r2).not.toMatch(EF) // first check only, as before
+  expect(JSON.stringify(judge.calls.at(-1))).toMatch(/hook-lookup\] version: synced: dispatch-guard 0\.6\.29/)
+})
+
+test('W2 judge (b): the unsupported-claim problem names its lookup; (a) and untagged problems are left as they were', async ($, on) => {
+  const { judge } = deepEngine(on, false)
+  w2Fs(on)
+  await jTurnStart($, 'status?', 'w2b')
+  await $.tool.call({ tool: 'Read', file_path: '/y' } as any) // a lookup ran: evidence-first does not fire
+  judge.reply = { isAnswered: true, text: JSON.stringify({ ok: false, problems: ['(b) "0.6.28 is being scored, due about 11:45" has no evidence', '(a) "0.6.27 is live" contradicts the grep'] }), usage: {} }
+  const r = String(((await $.tool.call(chk('0.6.27 is live. 0.6.28 is being scored, due about 11:45.', { ask: 'status?' }))) as any).result)
+  expect(r).toMatch(/^Deep mode: fix these/)
+  expect(r).toMatch(/judge: \(b\) "0\.6\.28 is being scored, due about 11:45" has no evidence → Lookup per claim type: a\) version: plugin: grep[^]*b\) status: agent\/job: ArtifactData list[^]*c\) time: clock[^]*Hook read[^)]*\): now /)
+  expect(r).toMatch(/judge: \(a\) "0\.6\.27 is live" contradicts the grep(?! →)/)
 })

@@ -17,7 +17,7 @@ grep -Fqx -- "- $rv: $cl" "$here/CHANGELOG.md" || { echo "CHANGELOG.md has no li
 tmp="$(mktemp -d)"; trap 'rc=$?; rm -rf "$tmp"; [ "$rc" = 0 ] && echo "RESULT: OK" || echo "RESULT: FAILED (exit $rc)"' EXIT
 mkdir "$tmp/dispatch-guard"
 # 0.6.29: eval caches (tools/judge-evals/cache) stay on disk for local runs and never ship
-tar -C "$here" --exclude=node_modules --exclude=.git --exclude=__pycache__ --exclude=bin --exclude=./tools/judge-evals/cache -cf - . | tar -C "$tmp/dispatch-guard" -xf -
+tar -C "$here" --exclude=node_modules --exclude=.git --exclude=__pycache__ --exclude=bin --exclude=./tools/judge-evals/cache --exclude=*.orig --exclude=*.rej -cf - . | tar -C "$tmp/dispatch-guard" -xf -
 rm -f "$out"
 (cd "$tmp" && zip -qr "$out" dispatch-guard)
 # scan what actually ships
