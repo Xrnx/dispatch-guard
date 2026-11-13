@@ -3018,7 +3018,7 @@ test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft pas
   expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
   expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 1, judge_ok: 1, judge_unavailable: 0, tokens_in: 100, tokens_out: 20, tokens_cache: 50 })
   expect(Object.values(d.fail_checks).reduce((a: number, b: any) => a + b, 0)).toBeGreaterThanOrEqual(2) // 0.6.22: the two failed BADC rounds are counted by check id
-  expect(PLUGIN_VERSION).toBe('0.6.32')
+  expect(PLUGIN_VERSION).toBe('0.6.33')
 })
 test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
   const { mem } = deepEngine(on, true)
@@ -3058,7 +3058,7 @@ test('0.6.19 deep-stats: the row has only the listed count fields, no draft/prob
   await $.tool.call(chk(CLEAN))
   await $.turn.complete(end('t1', CLEAN))
   const d = statRows(mem)[0].data
-  expect(Object.keys(d).sort()).toEqual(['attended', 'checker_rounds_ms_total', 'dark_hits', 'dark_samples', 'date', 'fail_checks', 'first_draft_pass', 'judge_calls', 'judge_ms_total', 'judge_ok', 'judge_unavailable', 'plugin_version', 'prompts_judged', 'rounds_total', 'session', 'session_origin', 'source', 'tokens_cache', 'tokens_in', 'tokens_out', 'turn_count', 'turn_ms_max', 'turn_ms_total', 'unchecked', 'unchecked_unattended'])
+  expect(Object.keys(d).sort()).toEqual(['attended', 'check_ms_total', 'checker_rounds_ms_total', 'dark_hits', 'dark_samples', 'date', 'fail_checks', 'final_count', 'final_ms_max', 'final_ms_total', 'first_draft_pass', 'first_ms_total', 'judge_calls', 'judge_ms_total', 'judge_ok', 'judge_unavailable', 'plugin_version', 'prompts_judged', 'rounds_total', 'session', 'session_origin', 'source', 'tokens_cache', 'tokens_in', 'tokens_out', 'turn_count', 'turn_ms_max', 'turn_ms_total', 'unchecked', 'unchecked_unattended'])
   expect(JSON.stringify(statRows(mem))).not.toMatch(/SECRET|Correction|date was wrong/)
   for (const [k, v] of Object.entries(d)) expect(k === 'fail_checks' || k === 'dark_hits' ? Object.values(v as object).every(c => typeof c === 'number') : k === 'dark_samples' ? typeof v === 'object' : typeof v === 'string' ? v.length < 60 : typeof v === 'number').toBe(true)
 })
@@ -3660,7 +3660,7 @@ test('0.6.23 dark_samples: last 3 per id, each <= 160 chars, whole field capped 
   // statsRow trims via the same helper the writer uses
   const big: Record<string, string[]> = {}
   for (let i = 0; i < 40; i++) big[`check-${i}`] = ['a'.repeat(160), 'b'.repeat(160), 'c'.repeat(160), 'd'.repeat(160)]
-  const row = statsRow('s', '2026-11-12', { date: '2026-11-12', prompts: 1, firstPass: 1, rounds: 0, unchecked: 0, jc: 0, jok: 0, jun: 0, tin: 0, tout: 0, tcache: 0, eRounds: 0, eFail: false, fc: {}, dh: { x: 4 }, ds: big, tms: 0, tn: 0, tmax: 0, jms: 0, crms: 0 } as any)
+  const row = statsRow('s', '2026-11-12', { date: '2026-11-12', prompts: 1, firstPass: 1, rounds: 0, unchecked: 0, jc: 0, jok: 0, jun: 0, tin: 0, tout: 0, tcache: 0, eRounds: 0, eFail: false, fc: {}, dh: { x: 4 }, ds: big, tms: 0, tn: 0, tmax: 0, jms: 0, crms: 0, fs: [], fl: 0, frms: 0, frn: 0, frmax: 0, fims: 0, cms: 0 } as any)
   expect(JSON.stringify(row.dark_samples).length).toBeLessThanOrEqual(DARK_SAMPLES_CAP)
   expect(DARK_SAMPLES_CAP).toBe(3000)
   for (const v of Object.values(row.dark_samples)) expect(v.length).toBeLessThanOrEqual(3)
@@ -4260,10 +4260,10 @@ test('0.6.29 fix d: the first deep J turn on a new version queues one Scoreboard
   await $.turn.complete(end('d2', 'Noted.'))
   const rows = ((mem.corrLog as any[]) ?? []).filter(r => r.collection === 'fixes')
   expect(rows.length).toBe(1)
-  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0632', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.32' } })
+  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0633', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.33' } })
   expect(rows[0].data.detail).toContain(CHANGELOG_LINE)
-  expect(mem[VERSION_ROW_KEY]).toBe('0.6.32')
-  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.32 (auto)')
+  expect(mem[VERSION_ROW_KEY]).toBe('0.6.33')
+  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.33 (auto)')
 })
 
 // 0.6.30 cross-turn bleed (live 13 Nov 12:37-12:39 SGT): rule (d) cited "Are you done with all fixes?" (12:35, answered) against later asks.
@@ -4386,4 +4386,90 @@ test('W6 threshold edges: over the word limit, long Clarification, mixed lines',
   expect(correctionWithoutPrevention('Clarification: ' + Array(LIGHT_WORDS + 1).fill('word').join(' '))).toBe(true)
   expect(correctionWithoutPrevention(`${NOISE[1]}\n${MISSES[0]}`)).toBe(true)
   expect(closureMisses(NOISE[1], {})).toEqual([])
+})
+
+// ---- 0.6.33 reply latency: final_* (last J-visible message per J message), first_ms_total, check_ms_total ----
+const latRow = (mem: Record<string, unknown>) => statRows(mem).slice(-1)[0].data
+test('0.6.33 latency: a prompt answered by a final text -> final = first = time to that text; check ms counted', async ($, on) => {
+  const { mem, judge } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  const c = clockAt(on)
+  judge.reply = () => { c.t += 2000; return JUDGE_OK }
+  await $.prompt.submit({ text: 'one' } as any)
+  await $.turn.start(turn('t1')); c.t += 5000
+  await $.tool.call(chk(CLEAN)); c.t += 1000
+  await $.turn.complete(end('t1', CLEAN))
+  const d = latRow(mem)
+  expect(d).toMatchObject({ final_count: 1, final_ms_total: 8000, final_ms_max: 8000, first_ms_total: 8000, check_ms_total: 2000 }) // 5000 + 2000 judge + 1000
+})
+test('0.6.33 latency: a prompt answered by SendUserMessage; a later final text moves final but not first', async ($, on) => {
+  const { mem } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  const c = clockAt(on)
+  await $.prompt.submit({ text: 'one' } as any)
+  await $.turn.start(turn('t1')); c.t += 3000
+  await $.tool.call(chk(CLEAN)); await $.tool.call(send(CLEAN)); c.t += 4000
+  await $.turn.complete(end('t1', 'Nothing to add.'))
+  expect(latRow(mem)).toMatchObject({ final_count: 1, final_ms_total: 7000, final_ms_max: 7000, first_ms_total: 3000 })
+})
+test('0.6.33 latency: a mid-turn J message counts from its delivery, its own reply ends its own final', async ($, on) => {
+  const { mem } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  const c = clockAt(on)
+  await $.prompt.submit({ text: 'one' } as any)
+  await $.turn.start(turn('t1')); c.t += 2000
+  await $.tool.call(chk(CLEAN)); await $.tool.call(send(CLEAN)); c.t += 6000
+  await $.prompt.submit({ text: 'also do two', turnId: 't1', origin: { kind: 'bridge' } } as any); c.t += 3000
+  await $.tool.call(chk('Noted. Two done.')); await $.tool.call(send('Noted. Two done.')); c.t += 1000
+  await $.turn.complete(end('t1', 'Nothing to add.'))
+  // msg 1 at 0, first reply 2000, last visible (closing text) at 12000; msg 2 at 8000, first reply 11000 (3000), last visible 12000 (4000)
+  expect(latRow(mem)).toMatchObject({ final_count: 2, final_ms_total: 12000 + 4000, final_ms_max: 12000, first_ms_total: 2000 + 3000 })
+})
+test('0.6.33 latency: a blocked send does not count until it goes out', async ($, on) => {
+  const { mem } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  const c = clockAt(on)
+  await $.prompt.submit({ text: 'one' } as any)
+  await $.turn.start(turn('t1')); c.t += 2000
+  const r: any = await $.tool.call(send(BADC)); expect(r.deny).toBeDefined(); c.t += 5000
+  await $.tool.call(chk(CLEAN)); await $.tool.call(send(CLEAN))
+  await $.turn.complete(end('t1', 'Nothing to add.'))
+  expect(latRow(mem)).toMatchObject({ final_count: 1, final_ms_total: 7000, first_ms_total: 7000 })
+})
+test('0.6.33 latency: a Stop re-check correction sent 20 s after the reply is inside final_ms, not first_ms', async ($, on) => {
+  const { mem } = deepEngine(on, false)
+  envBox(on, { CLAUDE_CODE_SESSION_ATTENDED: '1' })
+    const c = clockAt(on)
+  await jTurnStart($, 'is the zip ready?', 'a1')
+  c.t += 4000
+  expect(((await ($ as any).classic.Stop({ stop_hook_active: false, last_assistant_message: 'Yes, it is.' })) as any).block).toBe(STOP_RECHECK)
+  await $.turn.complete(end('a1', 'Yes, it is.'))
+  c.t += 20000
+  await $.tool.call(chk('Correction: the zip is not ready.')); await $.tool.call(send('Correction: the zip is not ready.'))
+  expect(latRow(mem)).toMatchObject({ final_count: 1, final_ms_total: 24000, final_ms_max: 24000, first_ms_total: 4000 })
+})
+test('0.6.33 latency: the open group is committed when the next J prompt starts; totals add up', async ($, on) => {
+  const { mem } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  const c = clockAt(on)
+  for (const [i, ms] of [[1, 3000], [2, 9000]] as const) {
+    await $.prompt.submit({ text: `p${i}` } as any)
+    await $.turn.start(turn(`t${i}`)); c.t += ms
+    await $.tool.call(chk(CLEAN))
+    await $.turn.complete(end(`t${i}`, CLEAN))
+  }
+  expect(latRow(mem)).toMatchObject({ final_count: 2, final_ms_total: 12000, final_ms_max: 9000 })
+})
+test('0.6.33 latency: a Stop re-check correction sent as final text of the continuation turn 20 s later moves final_ms', async ($, on) => {
+  const { mem } = deepEngine(on, false)
+  envBox(on, { CLAUDE_CODE_SESSION_ATTENDED: '1' })
+  const c = clockAt(on)
+  await jTurnStart($, 'is the zip ready?', 'a1')
+  c.t += 4000
+  expect(((await ($ as any).classic.Stop({ stop_hook_active: false, last_assistant_message: 'Yes, it is.' })) as any).block).toBe(STOP_RECHECK)
+  await $.turn.complete(end('a1', 'Yes, it is.'))
+  c.t += 20000
+  await $.turn.start({ text: `[dispatch-guard] ${STOP_RECHECK}`, turnId: 'lt2' } as any)
+  await $.turn.complete(end('lt2', 'Correction: the zip is not ready.'))
+  expect(latRow(mem)).toMatchObject({ final_count: 1, final_ms_total: 24000, final_ms_max: 24000, first_ms_total: 4000 })
 })
