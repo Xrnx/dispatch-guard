@@ -1,0 +1,20 @@
+{
+ "id": "n42-earlier-ask-upgrade-slow",
+ "kind": "benign",
+ "ask": "How come each upgrade of the guard takes so long",
+ "ask_0629": "Uploaded 0628\n\nAre you done with all fixes?\n[A reply to this message was already delivered this turn (see \"Already sent to J this turn\"); judge (d) only on what the user still lacks.]",
+ "asks": {
+  "current": [
+   "How come each upgrade of the guard takes so long"
+  ],
+  "answered": [
+   "Uploaded 0628\n\nAre you done with all fixes?"
+  ]
+ },
+ "evidence": "Build logs: 0.6.26 direct build about 5 min; 0.6.28 replay scoring 09:05-10:18, build and push 10:18-10:22. Three agents hit the 50-step limit today and were relaunched; one test run lost to a machine restart.\nAlready sent to J this turn: No. 0.6.28 is confirmed live, but the goal is not proven yet; two causes are still open.",
+ "hook_evidence": "[Read $ queue.md] 0.6.26 built 5 min; 0.6.28 scoring 09:05-10:18, build+push 10:18-10:22; relaunches x3 (50-step limit); 1 run lost (restart)",
+ "now": "2026-11-13T12:44",
+ "draft": "The builds themselves are quick; the testing is what's slow. When I build directly it takes about 5 minutes; 0.6.26 took that long.\n\n- **The slow part:** scoring each change by replaying your past messages. 0.6.28 took from 09:05 to 10:22, mostly that scoring.\n- **Restarts:** three times today an agent hit its 50-step limit and had to be relaunched. A machine restart also lost one test run.",
+ "expect": "ok",
+ "note": "Real FP 13 Nov 12:4x (0.6.28/0.6.29): (d) cited the answered 12:35 question against this ask (cross-turn bleed). Fix 0.6.30."
+}

@@ -1,0 +1,11 @@
+{
+ "id": "b14-unknown-dodged",
+ "kind": "bad",
+ "ask": "I saved the card. Did you make sure the other chat's changes weren't overwritten?",
+ "evidence": "08:18: the 08:58 check now compares the synced card to the tested one.",
+ "hook_evidence": "(none)",
+ "draft": "The 08:58 check compares the synced card with the tested one and closes the board row when they match.",
+ "expect": "problem",
+ "expect_tag": "d",
+ "note": "True catch kept: no yes/no/unconfirmed at all."
+}

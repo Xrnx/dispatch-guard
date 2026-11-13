@@ -1,0 +1,51 @@
+# Changelog
+
+One line per version, newest first. Every version bump adds its line here in the same commit. Sources: version comments in hooks/*.ts, README 0.6.x sections, git log. "no record" = no comment, README text or commit names that version.
+
+- 0.6.36: Wait times split by message type (quick reply, question, single task, multi-ask task) set from the user message before any work, with delay added after the first reply, and judge fails counted per rule (a to g).
+- 0.6.35: Scoreboard rows reach the board: the hook may not write there itself, so when rows wait 30 minutes it hands the exact batch to the main chat to send, and logs each flush result on disk.
+- 0.6.34: Scoreboard rows flow again: writes to existing rows carry their version, so stats and corrections stop getting stuck, and one refused row no longer blocks the rest; short corrections of the form X is Y, not Z skip the closure check; fix hints name a file already written this turn.
+- 0.6.33: Reply-latency stats: time from each J message to its final visible answer (corrections and Stop re-check included), recorded as final_ms_total/final_count/final_ms_max, plus first_ms_total and check_ms_total.
+- 0.6.32: 0.6.30 to 0.6.32 batch: the judge checks only the current ask, earlier asks shown as already answered; missing-lookup denials name the exact lookup per claim type; undone-work denials name the exact call per line (Agent launch, send_later, or the write to make) and the ending that passes; short corrections (25 words or fewer, no miss admitted, no figure swapped) skip the full Prevention/Why block.
+- 0.6.31: 0.6.30 + 0.6.31 batch: the judge checks only the current ask, earlier asks shown as already answered; missing-lookup denials name the exact lookup per claim type (version, status, figure, time, link), and the hook reads versions, clock and local files itself into the deny text; same drafts still fail first.
+- 0.6.30: judge rule (d) cross-turn bleed fixed: the judge ask is the J messages since the last final reply (a Stop re-check judges the asks its reply answered); earlier asks show only as context labelled already answered; a stale ask argument from the model no longer overrides; judge-evals gain prompt layouts (gate --layouts 0629,0630) and 4 cases.
+- 0.6.29: Stop re-check repeat loop fixed: short no-claim texts exempt; no second re-check in a chain after a PASS or sent correction; the app no-output nudge is not a J turn; footer-only re-check fails are logged, not sent to J; Scoreboard fixes row written on a new version's first deep turn; eval cache left out of the zip.
+- 0.6.28: live-skip fixes (AB-0628c winner L): every unchecked Stop text counted, unattended split, Stop re-check once, AI judge on every unchecked SendUserMessage, routing still off; footer problems all reported in round 1 plus a deterministic claim-ahead check (a job still open from an earlier launch or the board), also on the SendUserMessage gate; 13 new tests.
+- 0.6.27: Closure-line false alarms fixed (harness audit 13 Nov: 3 of 12 first-draft closure fails were false alarms): a reply that is itself the fix, an irreversible/J-only item, a memory or file write made this turn, or a job launched this turn (started/dispatched/relaunched/kicked off) now closes the line; 5 unit tests, the real-miss case still fails.
+- 0.6.26: 0.6.25 minus its deep-line rewrite (harness 13 Nov: the 8-line checklist made 87.5% of replies skip check_reply vs 47.9% live; without it skip 45.8%, quality 0.663 vs 0.618); deep line back to the 0.6.24 text.
+- 0.6.25: evidence-first gate (the turn's first check_reply is refused once when the draft states current state or answers a J correction/re-ask before any lookup; pack `evidence-first`); "nothing stated left undone" (J, 13 Nov): judge rules (e) every stated effect, intent, fix, prevention, follow-up or improvement is done this turn with evidence of the step, or marked needs J, (f) Prevention lines state a principle, incident names only in a trailing e.g., (g) the Stop-hook Correction follow-ups, (c) widened to the Stop-hook criteria; deterministic pre-filter: closure-line on Correction/Prevention/Efficiency/Leap lines (done + where with a real change this turn, or needs J; later/queued/handoff/none yet/next build only with a job launched this turn; hindsight needs the change made) and a judge-prompt note listing deferral-word lines when nothing changed or launched; classic.Stop: a reply check_reply passed ends the chain, so the prompt Stop hook only reviews unchecked replies; stop-repeat: after a Stop-hook block the continuation may not repeat what J saw; dangling-ref runs pre-send in check_reply; Efficiency fail texts no longer offer "Efficiency: none" and ask for what the first draft lacked, as a fact; deep line rewritten as an 8-line pre-draft checklist; source gate keeps multi-word items of an evidence claim with 2+ commas; write-time Scoreboard categories (J rows, auto rows low-confidence, pre-send rows from labels, `category_orig`); mid-turn fix: a SendUserMessage answers every message registered before it (prompt.submit fires on delivery), fold-in deny removed; judge false-positive fixes (guard-rounds audit): hook evidence carries each call's input digest, the judge prompt carries the SGT clock and zone, a final text delivered earlier in the prompt is noted as answered, style-only judge problems are dropped, the source gate treats only 3+ short comma parts as a keyword list and ignores negated or habitual state words; 13 judge-eval cases from that audit plus 9 for the new rules.
+- 0.6.24: Deep-stats row gains a speed meter (turn_ms_total, turn_count, turn_ms_max, judge_ms_total, checker_rounds_ms_total); auto-evidence digest: rolling last 30 non-read-only calls across turns, SGT-timed.
+- 0.6.23: Deep-stats row gains dark_hits and dark_samples (last 3 snippets per id, 3000-char cap).
+- 0.6.22: rule checks run before the judge; DEEP_LINE lists rule checks; deep-stats fail_checks; generic auto-evidence digest (this turn); efficiency-fix goes live.
+- 0.6.21: save-gate (dark by default), judge auto-evidence (Agent launches, sent messages), Efficiency-fix guard (ships dark), eta-proof on sent messages.
+- 0.6.20: burst-safe mid-turn (queued J messages block other tools until answered; fold-in deny; valve).
+- 0.6.19: deep-mode judge, session evidence, source gate (log-only), first-draft stats row, judge-evals harness.
+- 0.6.18: per-session rolling evidence store; agent hand-backs and notifications count as evidence; "Session facts" line for the writer.
+- 0.6.17: deep-mode failure cap (deep-cap), short replies skip the judge, token usage per judge call, privacy: Scoreboard rows carry generic labels only.
+- 0.6.16: deep mode: pre-send check_reply tool and AI judge; final reply must be the passed draft; checks run on the draft.
+- 0.6.15: reply modes (deep/light); prevention-line "why" check; unsaved-promise check.
+- 0.6.14: dark checks (logged, never shown); ported answer checks (stop-dates, stop-figures, stop-sources, stop-writes, page-cite, stripDrafts).
+- 0.6.13: no record.
+- 0.6.12: no record.
+- 0.6.11: unbacked-absolute and open-question checks; any-main-turn-tool-call flag.
+- 0.6.10: hook-fire rows with self-catch metric; ask-first counts only knowable asks; "Gap:" line check.
+- 0.6.9: no record.
+- 0.6.8: per-session label and scope-phrase tracking; undefined-label, chat-long scope, question-edit, reuse-first checks; rule pack v12 keys.
+- 0.6.7: live pack version shown on the upload line when not newer than bundled.
+- 0.6.6: slim (some checks switched off in code); replay clock flag (dg-clock-offset); orchestrator card second sentence from the A/B.
+- 0.6.5: no record.
+- 0.6.4: per-prompt J rows and J-correction rows; subagent loop guard (3 repeated failing Bash or Edit calls).
+- 0.6.3: done-claim read-back rule; style escalation owes a Correction line.
+- 0.6.2: sleep log.
+- 0.6.1: hook-fire rows (check id, session, SGT time); `requires` pack checks.
+- 0.6.0: leap-line, source-addendum, arith-proof, repeat-miss; first-reply and mid-turn replace the silence and 4th-call guards; thresholds from THRESHOLDS.md.
+- 0.5.9: judges J's own text, not the raw prompt with its prepended system-reminder.
+- 0.5.8: rule pack: check regexes, thresholds and texts overridable without an upload.
+- 0.5.7: dangling-ref: a "D1", "see below" or "next message" reference with nothing matching in the reply is flagged.
+- 0.5.6: reply first, ledger and board in the same round or later; clock stamp rides every prompt.
+- 0.5.0 to 0.5.5: no record.
+- 0.4.0: answer checks for recurring misses.
+- 0.3.5: /handoff slash-command turns exempt from the 4th-call reminder.
+- 0.3.4: skip the 4th-call reminder in handoff turns.
+- 0.3.3: synced to live.
+- 0.3.2 and earlier: rule-guard and the initial dispatch-guard mod (git history only, no version numbers).

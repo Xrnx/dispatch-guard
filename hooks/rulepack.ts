@@ -28,7 +28,13 @@ export const RANGES: Record<string, Record<string, [number, number]>> = {
   'deep-leap': { minWords: [20, 1000], minBullets: [1, 50] },
   'deep-cap': { cap: [0, 3] }, // 0.6.17: failed checks per draft before PASS with a note
   'deep-judge': { minWords: [0, 500] }, // 0.6.17: replies shorter than this skip the judge (unless the claim pattern matches)
+  'save-gate': { enforce: [0, 2] }, // 0.6.21: 0 off, 1 log-only (default), 2 live: rule saves and unchecked replies
+  'mid-turn': { burstSeconds: [0, 60], rounds: [0, 3], valve: [1, 50] }, // 0.6.20: burst window, failed check rounds for a mid-turn reply, block valve
   'deep-evidence': { sessionChars: [0, 40000], judgeChars: [0, 20000], factsChars: [0, 2000], sourceGate: [0, 2] }, // 0.6.18: rolling per-session evidence store size; share shown to the judge
+  'evidence-first': { enforce: [0, 2] }, // 0.6.25: 0 off, 1 log-only, 2 live (default)
+  'closure-line': { enforce: [0, 2] }, // 0.6.25: 0 off, 1 log-only, 2 live (default)
+  'claim-ahead': { enforce: [0, 2] }, // 0.6.28: 0 off, 1 log-only, 2 live (default)
+  'next-action': { delayMin: [1, 1440] }, // W3: send_later delay when an undone "later" line names no clock time
 }
 
 // 0.6.17: the judge's rules, overridable from a pack (deep-judge.messages.rules, JUDGE_RULES_MIN-JUDGE_RULES_MAX chars).
@@ -38,10 +44,13 @@ export const JUDGE_RULES = `You judge one assistant draft reply before the user 
 Flag a problem only when it is clear and matters; when unsure, ok:true. Flag ONLY:
 (a) a claim that the evidence or the user's message contradicts;
 (b) a claim that work is done, verified, fixed, saved or working, with nothing in the evidence or hook evidence supporting it;
-(c) work left undone or offered that the assistant could do itself (an offer of later work, a fix described but not started, a question it could check); questions only the user can decide are fine;
-(d) the user's question not answered.
-Do NOT flag: details merely absent from the evidence summary, paraphrases of material the assistant read, general knowledge, low-stakes or obvious details, wording style, or bookkeeping the assistant's standing rules require (logs, notes). Lines the user's standing rules require (Efficiency/Leap footers, a closing sleep line, checked: lines, Correction/Prevention/Why lines) are never problems for being unasked or unsupported.
-Reply with strict JSON only: {"ok":true|false,"problems":["(a|b|c|d) short problem: quote the words, say the fix"]}. At most 3 problems. ok:true means problems is [].`
+(c) work the assistant could do itself left undone or offered: an offer ("want me to", "I can"), a fix or next step described instead of done, a claim called unchecked or uncertain that it could look up, a question it could check; the user's own decisions, irreversible steps and work reported as running are fine;
+(d) the user's question not answered;
+(e) a stated effect, intent, fix, prevention, follow-up or improvement (Correction, Prevention, Efficiency and Leap lines included) not done this turn with evidence showing the change and the step in it that achieves the claim, unless marked needs J (irreversible or J-only); pre-filter lines need that proof;
+(f) a Prevention worded with the incident's tool, file, product or game names instead of a general principle (names only in a trailing "e.g.");
+(g) a Correction missing: why the user, not the assistant, caught it; a fix saved for all future work; a check that fires, when the same rule already missed; similar cases covered. A Correction: line of 25 words or fewer that only restates its own wording (no wrong fact, no admitted miss) owes none of this.
+Do NOT flag: details merely absent from the evidence summary, paraphrases of material the assistant read, general knowledge, low-stakes details, wording style, or bookkeeping the standing rules require. Footer, sleep, checked:, Correction/Prevention/Why lines are never problems for being unasked; their claims fall under (e)-(g).
+Reply with strict JSON only: {"ok":true|false,"problems":["(a-g) short problem: quote the words, say the fix"]}. At most 3 problems. ok:true means problems is [].`
 
 export const BUNDLED: Record<string, CheckDef> = {
   'running-proof': {
@@ -117,7 +126,7 @@ export const BUNDLED: Record<string, CheckDef> = {
   },
   'eta-proof': {
     patterns: { eta: /\b(ETA|done)\s*[:≈~]?\s*~?\d+(?:\s?[–-]\s?\d+)?\s?(min|mins|minutes|h|hrs?)\b/i, scaled: /×|\(\s*\d+\s?[x*]\s?\d/ }, // V4: ranges
-    messages: { line: 'eta-proof: minute ETA with no E×R — scale by the calibration ratio before relaying.' },
+    messages: { line: 'eta-proof: ETA not calibrated (minute ETA with no E×R) — scale by /areas/orchestrator-calibration.md before relaying.' },
   },
   'checked-line': {
     patterns: { ask: /\b(best|recommend|which|options?|alternatives?|should i|what about|anything else|compare|vs\.?)\b/i, checked: /\bchecked:/i },
@@ -285,6 +294,103 @@ export const BUNDLED: Record<string, CheckDef> = {
     numbers: { minWords: 80, minBullets: 5 },
     messages: { line: 'substantive reply without a Leap/Efficiency line' },
   },
+  // 0.6.21 save-gate (J approved 12 Nov): enforce 0 off, 1 log-only DARK (default), 2 live. Live: a rule save (memory write/str_replace/append, propose_skills; not /areas/handoffs/ paths,
+  // not ArtifactData) is denied until check_reply returned PASS this turn; a deep-mode final reply with no matching PASS is logged and gets one short carry line (`miss`), never a redo.
+  'save-gate': { numbers: { enforce: 1 }, messages: {
+    line: 'Run check_reply (evidence incl. each rule-writing gate step\'s result) before saving a rule.',
+    miss: 'Final reply was not passed by check_reply: add one short addendum with any claim the check would have flagged; no redo.' } },
+  // 0.6.25 evidence-first (J, 13 Nov): the first check_reply of a turn is refused when the draft states current state (`state`) or answers a J correction/re-ask
+  // and no evidence call ran yet this turn (lookups, Bash, ArtifactData/Artifact reads, memory reads; not check_reply, SendUserMessage, ToolSearch, launches or writes).
+  'evidence-first': {
+    numbers: { enforce: 2 },
+    patterns: { state: /\bv?\d+\.\d+\.\d+\b|\b(?:installed|uninstalled|loaded|synced|enabled|disabled|deployed|uploaded|in stock|out of stock|still (?:running|open|pending|there)|(?:is|are|was|were|it's|we're|you're) (?:live|on|running|active|available|current|latest|up to date))\b|^\W*(?:yes|no|yep|nope|correct|right)\b/im,
+      // W2 claim types (listing priority lives in register.ts LOOKUP_KINDS). Matched per prose line; one line can carry several types.
+      link: /https?:\/\/[^\s)>\]"'`]+/i,
+      path: /(?:^|[\s(`'"])((?:~|\/(?:home|root|tmp|mnt|workspace|Users|var|opt))\/[^\s`'"),;]+)/,
+      version: /\bv?\d+\.\d+\.\d+\b|\b(?:installed|uninstalled|synced|uploaded|upgraded)\b/i,
+      live: /\b(?:is|are|now|went|still|not) (?:live|deployed|published|active|enabled|disabled|loaded)\b|\blive (?:now|since)\b/i,
+      status: /\(running[^)]*\)|\b(?:running|queued|in progress|pending|being (?:built|scored|tested|run)|landed|stalled|still open|due (?:at |about |by )?\d{1,2}:\d{2})\b/i,
+      verified: /\b(?:verified|confirmed|tested|proven)\b/i,
+      done: /\b(?:done|fixed|saved|logged|written|added|updated|shipped|closed|marked|reached)\b/i,
+      figure: /\b\d+(?:\.\d+)?\s?%|\b\d+\s*(?:of|out of)\s*\d+\b|[$€£]\s?\d[\d,.]*|\b\d+(?:\.\d+)?x\b|\b\d+(?:\.\d+)? vs \d/i,
+      coverage: /\b(?:covers?|every|all of|none (?:are|is|of)|nothing (?:is|was|left)|never|always)\b/i,
+      time: /\b(?:[01]?\d|2[0-3]):[0-5]\d\b|\bETA\b|\b(?:about|in|~)\s?\d+\s?(?:min(?:ute)?s?|hours?|h)\b/i },
+    messages: { line: 'Evidence first: this draft states current state or answers a correction, and no lookup ran yet this turn. Run the check (read, Bash, ArtifactData get, memory_read), then redraft from its result.',
+      // W2: claim type → exact lookup, named per unbacked claim in the evidence-first and judge-(b) denials. Kinds the hook can read itself (version, live, time, path) carry its read-only result.
+      head: 'Lookup per claim type: {list}',
+      hook: 'Hook read (read-only, just now; cite it as hook evidence, no extra call needed): {x}',
+      lk_link: 'HTTP status as a browser sees it: curl -sSL -o /dev/null -w "%{http_code}" <url>.',
+      lk_path: 'the file itself: ls -l or Read the path.',
+      lk_version: 'plugin: grep \'"version"\' /root/.claude/plugins/synced/*/*/.claude-plugin/plugin.json; anything else versioned: read the file or artifact that carries the version.',
+      lk_live: 'plugin: the synced plugin.json grep; artifact: Artifact read of its url; job: its board status row.',
+      lk_status: 'agent/job: ArtifactData list, collection "status", on the board https://claude.ai/artifact/1pV8oEewdbsBMqi6EYDAA8 (TaskList for this session\'s own agents).',
+      lk_verified: 'the test run or source that shows it: run the test, or Read/grep the source and cite the line.',
+      lk_done: 'the write\'s own result this turn (Edit/Write/ArtifactData/memory write), else read the file or row back; nothing written: do it now or drop the claim.',
+      lk_figure: 'the file or report the figure came from: Read or grep it and cite the line; a derived figure: compute it in Bash.',
+      lk_coverage: 'list the whole set (ls, grep, ArtifactData list) and say what was and was not covered.',
+      lk_time: 'clock: Bash TZ=Asia/Singapore date; a past event\'s time: the tool result or file that stamped it.',
+      lk_answer: 're-read the source the question or correction is about (file, board row, earlier tool result) and quote it in evidence.' },
+  },
+  // 0.6.25 closure-line (J, 13 Nov; the deterministic pre-filter of the 00:27 "nothing stated left undone" rule): an Efficiency/Prevention/Correction/Leap line that names a change (`change`) closes only as done + where (`done` + `where`, with a real change
+  // this turn or an earlier/already marker) or needs J (`needsJ`). `defer` words (later, queued, handoff, next build) pass only with a job launched this turn named on the line (`running`);
+  // `hindsight` lines ("would have saved") pass only when a real change was made this turn. Plan/log writes (handoffs, open items, board/Scoreboard rows) are no change.
+  'closure-line': {
+    numbers: { enforce: 2 },
+    patterns: {
+      label: /^[ \t>]*(?:[-*+\u2022][ \t]+)?(?:\*\*|__)?[ \t]*(?:Efficiency|Prevention|Correction|Leap)\b[^:\n]{0,30}:(?:\*\*|__)?(.*)$/i,
+      change: /\b(?:mak(?:e|es|ing)|add(?:s|ed|ing)?|chang(?:e|es|ed|ing)|fix(?:es|ed|ing)?|mov(?:e|es|ed|ing)|sav(?:e|es|ing)|updat(?:e|es|ed|ing)|switch(?:es|ed|ing)?|drop(?:s|ped|ping)?|cach(?:e|es|ed|ing)|batch(?:es|ed|ing)?|automat\w*|script\w*|merg(?:e|es|ed|ing)|remov(?:e|es|ed|ing)|replac(?:e|es|ed|ing)|rewrit\w*|build(?:s|ing)?|built|ship(?:s|ped|ping)?|gate|hook|rule|check(?:s|ing)? (?:first|before)|(?:read|run|look)(?:ing)? \w+(?: \w+)? (?:first|before)|will|should(?! have)|from now on|next time|going forward|in future)\b/i,
+      done: /\b(?:done|landed|saved|added|changed|updated|fixed|filed|written|shipped|built|edited|published|pushed|committed|stored|set)\b/i,
+      where: /\b(?:in|to|at|into|on|via)\s+\S|https?:\/\/|`[^`]+`|\/[\w.-]+\/[\w./-]+|\b[\w-]+\.(?:md|ts|json|js|py|sh|html)\b/i,
+      past: /\b(?:already|earlier|previously|last (?:turn|session|night)|yesterday)\b|\b(?:at|on) \d{1,2}:\d{2}\b/i,
+      needsJ: /\bneeds? (?:J|you|your)\b|\(needs you\)|\byour (?:call|decision|ok|upload)\b|\b(?:none yet|not (?:done|made)|held|left)\b[^.\n]{0,40}\birreversible\b/i, // 0.6.27: an irreversible step is J-only by definition
+      defer: /\bnone yet\b|\b(?:later|queued|queue|handoff|hand-off|next (?:build|zip|version|release|session|chat|plugin)|tomorrow|follow-?up|pending|parked|backlog|to-?do)\b/i,
+      running: /\b(?:running|launched|relaunched|dispatched|started|kicked off|in progress|ETA)\b/i,
+      hindsight: /\b(?:would|could|should|might)(?: have|'ve)\b|\bwould['\u2019]ve\b/i,
+      modal: /\b(?:would|could|should|will|might|to be|once|until|when)\s+(?:\w+\s+){0,2}$/i,
+      // 0.6.27 false-alarm fixes (AB-0626d audit): `noun` = backlog/queue naming a thing ("backlog merge", "queue runner"), not a parking place;
+      // `reply` = a Correction fixed by this reply itself; `now` + `whereNoun` = "the goal file now ..." after a real change this turn.
+      noun: /(?<!\b(?:to|in|into|on|onto|for)\s+(?:the\s+|my\s+|a\s+|its\s+)?)\b(?:backlog|queue)\s+(?=(?:work|merge|runner|items?|rows?|fixes)\b)/i,
+      reply: /\b(?:corrected|fixed|retracted|withdrawn|restated|amended)\b[^.;\n]{0,20}\b(?:in|by) (?:this|the) (?:reply|message|answer)\b/i,
+      now: /(?<!\bfrom\s)\bnow\b(?!\s+on\b)/i,
+      whereNoun: /\b(?:the|this|my) [\w-]+ (?:file|card|skill|pack|list|memory)\b/i,
+    },
+    messages: { line: 'Close each fix line: end it "done in <where>" (only if changed this turn) or "needs J". Later/queued/handoff/next build only with a job launched this turn; hindsight needs the change made now.' },
+  },
+  // 0.6.28 claim-ahead (J, 13 Nov; DRAFT-REVIEW "claim ahead of work"): a Correction/Prevention/Efficiency/Status/Next line that says work is done
+  // ("done in <place>", built, saved) or started (running, launched, sent) passes only when this turn's tool log has a matching action: a write naming the
+  // place (Edit/Write/memory write/ArtifactData write/Artifact publish/file-writing Bash) for `place`, any write for `write`, a launch or send for `launch`/`send`.
+  // Text match only, no judge. `exempt` (clause) and `before` (the words just before the verb) keep requested / needs J / not built / would / reported speech allowed.
+  'claim-ahead': {
+    numbers: { enforce: 2 },
+    patterns: {
+      label: /^[ \t>]*(?:[-*+•][ \t]+)?(?:\*\*|__)?[ \t]*(?:Correction|Prevention|Efficiency|Status|Next)\b(?=[^\n]{0,80}:)(.*)$/i,
+      place: /\b(?:done|saved|built|written)\s+(?:in|to|into|at|under)\s+(?!(?:this|the) (?:reply|message|answer|chat|thread|turn)\b|chat\b|(?:about|around|under|over|less|more|a few|an?|~|\d)\s*(?:\d|min|minutes?|hours?|h\b|secs?|seconds?|days?|than)|~?\d)/i,
+      write: /\b(?:built|saved|rebuilt)\b(?!-in\b)/i,
+      launch: /\b(?:running|launched|relaunched|dispatched)\b/i,
+      send: /\bsent\b/i,
+      fresh: /\b(?:now|just|this turn|this round)\b/i, // a Correction narrates the past miss: its write/launch/send words claim this turn's work only with one of these
+      exempt: /\b(?:(?:started|launched|dispatched|since|from)\s+(?:at\s+)?\d{1,2}:\d{2}|(?:last|earlier|previous|prior) (?:turn|reply|round|night)|requested|needs? (?:J|you|your)|\(needs you\)|not(?: yet)? (?:\w+ )?(?:built|saved|done|sent|launched|running|started|made)|not yet|none yet|irreversible|J-only|your (?:call|decision|ok)|until|unless|once)\b/i,
+      before: /\b(?:if|whether|when|once|until|unless|before|after)\b(?:[^\w(),;:]+\w+){0,4}[^\w(),;:]+$|(?:\b(?:not|never|no|nothing|none|neither|nor|with|without|confirm|check|verify|ensure|had|will|would|could|should|might|may|must|be|being|gets?|getting|needs?|asked|awaiting|pending|planned|proposed|due|yet|said|says|called|claimed|reported|stated|wrote|told|marked|listed|you|J|he|she|they)\b|n['’]t|['’](?:ll|d))\W*(?:\w+\W+){0,2}$|\b(?:by|for|from|of|about|whenever|while|stop|start|still|already|earlier|previously|and not|a|an|the|my|its|their|our|his|her|whose)\W+$|\b(?:every|any|each|all|only)\W+(?:\w+\W+){0,2}$/i,
+      after: /^\W{0,3}(?:(?:at|on|since)\s+)?\d{1,2}:\d{2}\b|^\s*(?:(?:it|them|this|that)\s+)?back\b|^\s*(?:(?:this|the|my|a|that|its|first|earlier|previous|final)\s+){0,2}(?:draft|answer|reply|version)\b|^\s*(?:you|me|us|J|him|her|them|time|rounds?|tokens?|turns?|minutes?|hours?|steps?|a (?:round|turn|step|call)|total|tally|count|sum|log|list|low|out|costs?|text|state|earlier|previously|before|already|yesterday|last)\b|^\s*(?:\$|~)\s*\d|^\s*\d+(?:\.\d+)?\s*(?:%|x|k|s|min|minutes?|hours?|rounds?|turns?|calls?|tokens?|steps?|messages?)\b/i,
+    },
+    messages: { line: 'Claim ahead of work: done/built/saved/running/launched/sent with no matching write or launch this turn (running: nor a live job on record). Do it now, or say "requested", "needs J" or "not built".' },
+  },
+  // W3 (13 Nov; AB-0628 cause W, 27 of 67 failed first drafts): a refused draft's undone-work lines (closure-line / claim-ahead misses, lines judge (c)/(e)/(g) quotes)
+  // get the exact next action (tool + target) and the line ending that closes it. Text only: whether a draft is refused is unchanged. Shapes are tried in this order:
+  // `hindsight` (lesson, no change), `offer` (handed to J or "can't edit here"), `plan` (a handoff/note/request standing in for the change), `later` (own future step:
+  // "I'll", "Next: ... when X lands", a clock time), then a Leap idea. `lookup` = a judge (c) item that is a lookup left undone (W2 names that one). `clock` = a time to pass to send_later.
+  'next-action': {
+    numbers: { delayMin: 60 },
+    patterns: {
+      hindsight: /\b(?:would|could|should|might)(?: have|['\u2019]ve)\b|\bwould['\u2019]ve\b/i,
+      offer: /\bpaste (?:this|it|that|the)\b|\bcan['\u2019]?t (?:edit|change|save|write|update)\b|\bcannot (?:edit|change|save|write)\b|\b(?:proposed|suggested) (?:change|edit|fix|rule)\b|\bfor you to\b|\byou (?:can|could|should|may) (?:add|paste|edit|save|change)\b|\bneeds? your (?:claude\.ai )?settings\b/i,
+      plan: /\b(?:handoff|hand-off|open items?|queued|queue|brief|memory note|note written|none (?:yet|durable)|not (?:yet )?(?:built|ported|implemented|live|tested)|once (?:it['\u2019]?s |it is )?(?:built|ported|implemented)|requested|pending|staged|next (?:build|version|release|session|plugin)|later session|untested|intended)\b/i,
+      later: /\b(?:I['\u2019]ll|I will|we['\u2019]ll|will (?:\w+ )?(?:check|send|report|confirm|compare|look|add|run|review|post|share|ping))\b|^\W*(?:\(auto\b|next\b)|\b(?:tomorrow|tonight|later today|later)\b|\bwhen\b[^.;\n]{0,40}\b(?:lands?|done|finish(?:es)?|built|ready|back)\b|\bonce\b[^.;\n]{0,40}\b(?:lands?|done|finish(?:es)?|ready|back)\b|\b(?:around|at|by) \d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b(?:around|at|by) \d{1,2}:\d{2}\b/i,
+      clock: /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b|\b(\d{1,2}):(\d{2})\b/i,
+      lookup: /\b(?:could (?:check|read|look|verify|grep|confirm)|look(?:s|ed)? (?:it |this |that )?up|lookup|unverified|unconfirmed|left unverified|read (?:the|it|its))\b/i,
+    },
+    messages: { head: 'Next action per undone line (make the call, then end the line as shown):' },
+  },
   // 0.6.17 deep-cap: failed checks per draft before PASS-with-note (0 = never fail a draft).
   'deep-cap': { numbers: { cap: 1 } },
   // 0.6.17 deep-judge: replies under minWords words skip the AI judge unless `claim` matches; `rules` is the judge's system text.
@@ -318,7 +424,18 @@ export const BUNDLED: Record<string, CheckDef> = {
   },
   // 0.6.0 mid-turn (replaces the 4th-call count): a J message arrived mid-turn and no SendUserMessage has answered it.
   // first-reply (replaces the 8-call silence count): work started in a J turn before its first SendUserMessage.
-  'mid-turn': { messages: { line: 'J wrote mid-turn — answer via SendUserMessage now; hand the rest to a background agent' } },
+  // 0.6.20 (burst-safe): while a mid-turn J message is unanswered, every main-thread tool but SendUserMessage, delegation (Agent/Task/SendMessage),
+  // ToolSearch and check_reply is denied (`block`); a reply to it gets `rounds` failed check rounds (0: its first check_reply round is the only one);
+  // a message J adds within burstSeconds of his previous one, unseen when the reply is sent, gets one `fold` deny so one reply covers the burst.
+  // valve: denials per pending set before the block falls back to the `line` nudge (a runtime where the reply cannot go out never deadlocks).
+  'mid-turn': {
+    numbers: { burstSeconds: 10, rounds: 0, valve: 6 },
+    messages: {
+      line: 'J wrote mid-turn — answer via SendUserMessage now; hand the rest to a background agent',
+      block: 'Blocked: J wrote mid-turn ({n} unanswered). Reply now: ONE SendUserMessage covering each message below, then delegate the rest (Agent/SendMessage). Other tools stay blocked till it goes out. {list}',
+      fold: 'Not sent: J added {n} message(s) within {secs}s. Fold them into this same reply and resend via SendUserMessage; no new check_reply needed. {list}', // unused since 0.6.25 (kept so packs that set it still validate)
+    },
+  },
   // 0.6.3 done-claim: a J-facing done/fixed/live/shipped/published/verified claim about this turn's write with no read-back after the last write.
   'done-claim': {
     patterns: { claim: /(?<!\bun)(?<!\bnot )(?<!n't )(?<!\bnot yet )\b(?:done|fixed|live|shipped|published|verified)\b/i },

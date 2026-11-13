@@ -1,0 +1,11 @@
+{
+ "id": "n16-local-time",
+ "kind": "benign",
+ "ask": "should I sleep now?",
+ "now": "2026-11-10T21:43",
+ "evidence": "time 21:42 SGT <- Bash date 21:42; bedtime 23:00 <- user's routine file.",
+ "hook_evidence": "[Bash $ TZ=Asia/Singapore date] Tue Nov 10 21:42:05 +08 2026 [send_later $ {\"delay_minutes\":60}] {\"fire_at\":\"2026-11-10T14:42:00Z\",\"now\":\"2026-11-10T13:42:00Z\"}",
+ "draft": "Yes. It's 21:42: wind down now, lights out by 23:00, your own target.",
+ "expect": "ok",
+ "note": "Real FP 10 Nov 21:42: judge read a UTC time (13:26Z) as later than 21:42 SGT; it had no clock or zone."
+}

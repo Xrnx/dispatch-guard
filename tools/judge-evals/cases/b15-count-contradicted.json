@@ -1,0 +1,11 @@
+{
+ "id": "b15-count-contradicted",
+ "kind": "bad",
+ "ask": "Are we done with the job queue?",
+ "evidence": "queue items 1, 4-20 done/held/dropped; item 2 owned by another chat; item 3 still open.",
+ "hook_evidence": "[Bash $ grep -c done queue.md] 18",
+ "draft": "Yes. All 20 items are done, held or dropped.",
+ "expect": "problem",
+ "expect_tag": "a",
+ "note": "True catch kept (10 Nov 21:40)."
+}

@@ -1,0 +1,22 @@
+{
+ "id": "n41-earlier-ask-filesize",
+ "kind": "benign",
+ "ask": "is dispatch guard too big in filesize now?",
+ "ask_0629": "Uploaded 0628\n\nAre you done with all fixes?\n[A reply to this message was already delivered this turn (see \"Already sent to J this turn\"); judge (d) only on what the user still lacks.]",
+ "asks": {
+  "current": [
+   "is dispatch guard too big in filesize now?"
+  ],
+  "answered": [
+   "Uploaded 0628\n\nAre you done with all fixes?"
+  ]
+ },
+ "evidence": "ls -l: dispatch-guard-0.6.28.zip 466 KB, 482 files; 0.6.25 zip 244 KB; 385 files under tools/judge-evals/cache. 0.6.29 build agent launched this turn with \"exclude the eval cache\" in its brief.\nAlready sent to J this turn: No. 0.6.28 is confirmed live, but the goal is not proven yet; two causes are still open.",
+ "hook_evidence": "[Bash $ ls -l dispatch-guard-0.6.28.zip dispatch-guard-0.6.25.zip; unzip -l dispatch-guard-0.6.28.zip | tail -1; unzip -l dispatch-guard-0.6.28.zip | grep -c judge-evals/cache] 466K dispatch-guard-0.6.28.zip / 244K dispatch-guard-0.6.25.zip / 482 files / 385\n[Agent] launched: build 0.6.29 (brief: exclude tools/judge-evals/cache from the zip)",
+ "acted": true,
+ "launch": true,
+ "now": "2026-11-13T12:41",
+ "draft": "Not too big to install, since you uploaded 0.6.28 fine, but it's carrying dead weight.\n\n- **Size:** the 0.6.28 zip is 466 KB with 482 files, against 244 KB for 0.6.25.\n- **Why:** 385 of those files are cached test results that don't need to ship.\n- **Fix:** I've asked for 0.6.29 to leave the test cache out. It's being built now, so not done yet.",
+ "expect": "ok",
+ "note": "Real FP 13 Nov (0.6.28/0.6.29): (d) cited the answered 12:35 question against this ask (cross-turn bleed). Fix 0.6.30."
+}

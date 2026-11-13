@@ -1,0 +1,11 @@
+{
+  "id": "n30-prevention-done-principle",
+  "kind": "benign",
+  "ask": "you counted 5 parties, the source has 4",
+  "evidence": "source re-read 00:10: 4 parties; rule saved <- memory write 00:11",
+  "hook_evidence": "[Read] source: Parties (1) to (4)\n[memory_str_replace] standing rules new_str: 'Count items from the source list before writing a number. e.g. a party count.'",
+  "draft": "Correction: 4 parties, not 5.\nWhy you caught it: I did not re-read the list.\nPrevention: saved to standing rules: count items from the source list before writing a number. e.g. a party count.",
+  "expect": "ok",
+  "acted": true,
+  "note": "Prevention done this turn, principle first, incident only as e.g."
+}

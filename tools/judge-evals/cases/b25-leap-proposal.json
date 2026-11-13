@@ -1,0 +1,12 @@
+{
+  "id": "b25-leap-proposal",
+  "kind": "bad",
+  "ask": "summarise the open items",
+  "evidence": "open items file read 00:30: renew lease, file Q3 return, chase vendor quote, book venue",
+  "hook_evidence": "[memory_read] open items: renew lease (owner: you); file Q3 return; chase vendor quote; book venue",
+  "draft": "Four open items: renew the lease, file the Q3 return, chase the vendor quote, book the venue.\n**Efficiency:** none.\n**Leap:** a nightly digest of open items would cut your morning review by half.",
+  "expect": "problem",
+  "expect_tag": "e",
+  "acted": false,
+  "note": "Leap line proposing an improvement, neither done nor marked needs J. (Items spelled out: the placeholder \"A, B, C, D\" drew (d) unanswered on both rule sets.)"
+}
