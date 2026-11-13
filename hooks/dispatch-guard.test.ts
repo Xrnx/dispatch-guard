@@ -3,7 +3,7 @@ import { CARD } from './orchestrator-card'
 import { askPush, askAnswered, buildAsk, NO_NEW_ASK, EARLIER_ASKS, ASK_DONE_MAX, type AskState } from './register'
 import { validatePack, bundledPackJson, BUNDLED_VERSION, mergePack, bundledRules } from './rulepack'
 import { closureMisses, evidenceFirstHit, evidenceCall, realChange, deepCategory, jRow, corrRow, prefilterLines, repeatedLines } from './register'
-import { MISSING_LINE, sessionBlock, SESSION_INDEX_KEY, KEEP_SESSIONS, problemLabel, SET_RULES_TOOL, RULES_KEY, deepLine, setRules, cleanProblem, deepRow, tokensOf, JUDGE_TOKENS_KEY, judgeRules, skipJudge, denyCap, modeCommand, deepProblems, missingEfficiency, deepMissingLeap, replyHash, CHECK_TOOL, MODE_KEY, DENY_LOG_KEY, CAUGHT_KEY, JUDGE_KEY, JUDGE_RULES, parseJudge, DEEP_LINE, DEEP_DARK, CHECK_SPEC, stubOutput, undefinedLabels, questionOnly, redrafts, missingLeap, uncomputed, numbersIn, nonPreventions, startsWork, answersFirst, scopePhrases, asksJ, buriedAsks, promises, parkedFix, foregroundWait, offers, RELAY_AT, longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, jText, reasks, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL, clockStamp, danglingRefs, isJ, knowableAsks, inputAsk, workMade, draftGap, missUnlanded, fixEvidence, settleRow, absoluteClaims, openQuestions, PLUGIN_VERSION, sourceGate, efficiencyFix, STATS_KEY, statsRow, DARK_SAMPLES_CAP, STOP_RECHECK, SEND_JUDGE, SEND_ROUTE, ROUTE_LINE, statsJudge, STYLE_PROBLEM, inputDigest, keywordList, stateClaim, stopShort, footerOnly, NO_OUTPUT_NUDGE, versionRow, VERSION_ROW_KEY, CHANGELOG_LINE } from './register'
+import { MISSING_LINE, sessionBlock, SESSION_INDEX_KEY, KEEP_SESSIONS, problemLabel, SET_RULES_TOOL, RULES_KEY, deepLine, setRules, cleanProblem, deepRow, tokensOf, JUDGE_TOKENS_KEY, judgeRules, skipJudge, denyCap, modeCommand, deepProblems, missingEfficiency, deepMissingLeap, replyHash, CHECK_TOOL, MODE_KEY, DENY_LOG_KEY, CAUGHT_KEY, JUDGE_KEY, JUDGE_RULES, parseJudge, DEEP_LINE, DEEP_DARK, CHECK_SPEC, stubOutput, undefinedLabels, questionOnly, redrafts, missingLeap, uncomputed, numbersIn, nonPreventions, startsWork, answersFirst, scopePhrases, asksJ, buriedAsks, promises, parkedFix, foregroundWait, offers, RELAY_AT, longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, jText, reasks, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL, clockStamp, danglingRefs, isJ, knowableAsks, inputAsk, workMade, draftGap, missUnlanded, fixEvidence, settleRow, absoluteClaims, openQuestions, PLUGIN_VERSION, sourceGate, efficiencyFix, STATS_KEY, statsRow, DARK_SAMPLES_CAP, STOP_RECHECK, SEND_JUDGE, SEND_ROUTE, ROUTE_LINE, statsJudge, STYLE_PROBLEM, inputDigest, keywordList, stateClaim, stopShort, footerOnly, NO_OUTPUT_NUDGE, versionRow, VERSION_ROW_KEY, CHANGELOG_LINE, classifyTier, askCount, wordCount, judgeLetters } from './register'
 
 const TURN = /4th tool call this turn/
 const BASH = /Foreground Bash builds\/tests\/installs\/clones\/waits/
@@ -3018,7 +3018,7 @@ test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft pas
   expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
   expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 1, judge_ok: 1, judge_unavailable: 0, tokens_in: 100, tokens_out: 20, tokens_cache: 50 })
   expect(Object.values(d.fail_checks).reduce((a: number, b: any) => a + b, 0)).toBeGreaterThanOrEqual(2) // 0.6.22: the two failed BADC rounds are counted by check id
-  expect(PLUGIN_VERSION).toBe('0.6.35')
+  expect(PLUGIN_VERSION).toBe('0.6.36')
 })
 test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
   const { mem } = deepEngine(on, true)
@@ -3058,9 +3058,9 @@ test('0.6.19 deep-stats: the row has only the listed count fields, no draft/prob
   await $.tool.call(chk(CLEAN))
   await $.turn.complete(end('t1', CLEAN))
   const d = statRows(mem)[0].data
-  expect(Object.keys(d).sort()).toEqual(['attended', 'check_ms_total', 'checker_rounds_ms_total', 'dark_hits', 'dark_samples', 'date', 'fail_checks', 'final_count', 'final_ms_max', 'final_ms_total', 'first_draft_pass', 'first_ms_total', 'judge_calls', 'judge_ms_total', 'judge_ok', 'judge_unavailable', 'plugin_version', 'prompts_judged', 'rounds_total', 'session', 'session_origin', 'source', 'tokens_cache', 'tokens_in', 'tokens_out', 'turn_count', 'turn_ms_max', 'turn_ms_total', 'unchecked', 'unchecked_unattended'])
+  expect(Object.keys(d).sort()).toEqual(['attended', 'check_ms_total', 'checker_rounds_ms_total', 'dark_hits', 'dark_samples', 'date', 'fail_checks', 'final_count', 'final_ms_max', 'final_ms_total', 'first_draft_pass', 'first_ms_total', 'judge_calls', 'judge_ms_total', 'judge_ok', 'judge_unavailable', 'lat_ack', 'lat_question', 'lat_task1', 'lat_taskN', 'plugin_version', 'post_first_ms_total', 'prompts_judged', 'rounds_total', 'session', 'session_origin', 'source', 'tokens_cache', 'tokens_in', 'tokens_out', 'turn_count', 'turn_ms_max', 'turn_ms_total', 'unchecked', 'unchecked_unattended'])
   expect(JSON.stringify(statRows(mem))).not.toMatch(/SECRET|Correction|date was wrong/)
-  for (const [k, v] of Object.entries(d)) expect(k === 'fail_checks' || k === 'dark_hits' ? Object.values(v as object).every(c => typeof c === 'number') : k === 'dark_samples' ? typeof v === 'object' : typeof v === 'string' ? v.length < 60 : typeof v === 'number').toBe(true)
+  for (const [k, v] of Object.entries(d)) expect(k === 'fail_checks' || k === 'dark_hits' ? Object.values(v as object).every(c => typeof c === 'number') : k === 'dark_samples' ? typeof v === 'object' : k.startsWith('lat_') ? Object.values(v as object).every(c => typeof c === 'number') : typeof v === 'string' ? v.length < 60 : typeof v === 'number').toBe(true)
 })
 test('0.6.19 deep-stats: judge totals are running per-session counters (unavailable counted apart), not summed from the shared judgeLog', async ($, on) => {
   const { mem, judge, sidBox } = deepEngine(on, true)
@@ -4260,10 +4260,10 @@ test('0.6.29 fix d: the first deep J turn on a new version queues one Scoreboard
   await $.turn.complete(end('d2', 'Noted.'))
   const rows = ((mem.corrLog as any[]) ?? []).filter(r => r.collection === 'fixes')
   expect(rows.length).toBe(1)
-  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0635', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.35' } })
+  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0636', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.36' } })
   expect(rows[0].data.detail).toContain(CHANGELOG_LINE)
-  expect(mem[VERSION_ROW_KEY]).toBe('0.6.35')
-  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.35 (auto)')
+  expect(mem[VERSION_ROW_KEY]).toBe('0.6.36')
+  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.36 (auto)')
 })
 
 // 0.6.30 cross-turn bleed (live 13 Nov 12:37-12:39 SGT): rule (d) cited "Are you done with all fixes?" (12:35, answered) against later asks.
@@ -4472,4 +4472,141 @@ test('0.6.33 latency: a Stop re-check correction sent as final text of the conti
   await $.turn.start({ text: `[dispatch-guard] ${STOP_RECHECK}`, turnId: 'lt2' } as any)
   await $.turn.complete(end('lt2', 'Correction: the zip is not ready.'))
   expect(latRow(mem)).toMatchObject({ final_count: 1, final_ms_total: 24000, final_ms_max: 24000, first_ms_total: 4000 })
+})
+
+// ---- W14 latency tiers: lat_ack/lat_question/lat_task1/lat_taskN {t,n,f,c,p,tools_total,words_total}, tier set from J's message at arrival; post_first_ms_total ----
+const rd = (i: number) => ({ tool: 'Read', file_path: `/x${i}` } as any)
+const Z = { t: 0, n: 0, f: 0, c: 0, p: 0, tools_total: 0, words_total: 0 }
+test('W14 classifyTier: real-style asks and edge cases', () => {
+  const cases: [string, string, number?][] = [
+    ['thanks', 'ack'], ['ok', 'ack'], ['Noted, thanks!', 'ack'], ['go ahead', 'ack'], ['looks right to me', 'ack'],
+    ['why?', 'question'], ['what time is it', 'question'], ['is the zip ready?', 'question'], ['status of the novation deed', 'question'],
+    ['lower time taken could just mean responding to simpler queries', 'question'],
+    ['fix the bug', 'task1'], ['ok now fix the panel on mobile', 'task1'], ['compare these two drafts and mark up clause 4', 'task1'],
+    ['can you check whether the cross-refs in clause 12 still hold?', 'task1'],
+    ['what do you think of this', 'task1', 1], ['<uploaded_files>/mnt/user-data/uploads/spa.docx</uploaded_files> thoughts?', 'task1'],
+    ['fix the panel. why is it slow? and is the row too big?', 'taskN'], ['update the deed:\n1. clause 2\n2. clause 5', 'taskN'],
+    ['what about these?\n- clause 2\n- clause 5', 'question'],
+    ['<system-reminder>build everything</system-reminder>thanks', 'ack'], ['', 'ack'],
+  ]
+  for (const [t, tier, att] of cases) expect([t, classifyTier(t, att ?? 0)]).toEqual([t, tier])
+  expect(wordCount('  Noted.  Two options\nleft. ')).toBe(4)
+})
+test('W14 askCount: question-mark runs, list lines, quoted excerpts; min 1', () => {
+  const cases: [string, number][] = [
+    ['fix it', 1], ['', 1], ['why?? and how?', 2], ['is it ready? when?', 2],
+    ['do these:\n1. clause 2\n2) clause 5\n- the schedule\n(a) recitals', 4],
+    ['1. why is this slow?', 1], // a list line counts once, its ? not again
+    ['> clause 4.2 reads badly\n> and 4.3 too\nfix both', 1], ['> a\nok\n> b', 2],
+    ['change "the Lender may at any time assign" and "Borrower shall"', 1], ['change "the Lender may at any time assign" and "Borrower shall procure that each Guarantor"', 2],
+    ['<system-reminder>a? b? c?</system-reminder>fix it', 1], ['v1.2 then 3.5 increase', 1],
+  ]
+  for (const [t, n] of cases) expect([t, askCount(t)]).toEqual([t, n])
+})
+for (const [text, tier] of [['thanks', 'ack'], ['why is the row bigger now?', 'question'], ['build the latency panel', 'task1'], ['build the panel. why is it slow? is the row big?', 'taskN']] as const) {
+  test(`W14 latency: "${text}" -> lat_${tier} only, whatever the tool calls`, async ($, on) => {
+    const { mem } = deepEngine(on, true)
+    on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+    const c = clockAt(on)
+    await $.prompt.submit({ text } as any)
+    await $.turn.start(turn('t1'))
+    for (let i = 0; i < 20; i++) await $.tool.call(rd(i)) // many calls never move the tier
+    c.t += 5000
+    await $.tool.call(chk(CLEAN))
+    await $.turn.complete(end('t1', CLEAN))
+    const d = latRow(mem)
+    for (const b of ['ack', 'question', 'task1', 'taskN']) expect(d[`lat_${b}`]).toEqual(b === tier ? { t: 5000, n: 1, f: 5000, c: 0, p: 0, tools_total: 20, words_total: 4 } : Z)
+    expect(d).toMatchObject({ final_count: 1, final_ms_total: 5000, post_first_ms_total: 0 })
+  })
+}
+test('W14 latency: tools_total skips SendUserMessage, check_reply and a denied send', async ($, on) => {
+  const { mem } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  const c = clockAt(on)
+  await $.prompt.submit({ text: 'fix it' } as any)
+  await $.turn.start(turn('t1'))
+  await $.tool.call(rd(1)); await $.tool.call(rd(2))
+  const r: any = await $.tool.call(send(BADC)); expect(r.deny).toBeDefined()
+  for (let i = 0; i < 3; i++) await $.tool.call(chk(CLEAN))
+  c.t += 2000
+  await $.tool.call(send(CLEAN))
+  await $.turn.complete(end('t1', ''))
+  expect(latRow(mem).lat_task1).toMatchObject({ n: 1, t: 2000, tools_total: 2 })
+})
+test('W14 latency: post_first = final - first per message, summed across prompts and per tier; check ms in the tier', async ($, on) => {
+  const { mem, judge } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  const c = clockAt(on)
+  judge.reply = () => { c.t += 1500; return JUDGE_OK }
+  await $.prompt.submit({ text: 'draft the rider' } as any) // task: send at 3000 (+1500 judge), closing text 4000 later -> p 4000
+  await $.turn.start(turn('t1'))
+  for (let i = 0; i < 4; i++) await $.tool.call(rd(i))
+  c.t += 3000
+  await $.tool.call(chk(CLEAN)); await $.tool.call(send(CLEAN)); c.t += 4000
+  await $.turn.complete(end('t1', 'Nothing more to add here.'))
+  await $.prompt.submit({ text: 'is it signed?' } as any) // question: send at 1000 (+1500), final text 2000 later -> p 2000
+  await $.turn.start(turn('t2')); c.t += 1000
+  await $.tool.call(chk(CLEAN)); await $.tool.call(send(CLEAN)); c.t += 2000
+  await $.turn.complete(end('t2', 'Done.'))
+  const d = latRow(mem)
+  expect(d.lat_task1).toEqual({ t: 8500, n: 1, f: 4500, c: 1500, p: 4000, tools_total: 4, words_total: 5 })
+  expect(d.lat_question).toEqual({ t: 4500, n: 1, f: 2500, c: 1500, p: 2000, tools_total: 0, words_total: 1 })
+  expect(d).toMatchObject({ final_count: 2, final_ms_total: 13000, first_ms_total: 7000, check_ms_total: 3000, post_first_ms_total: 6000 })
+  expect(d.post_first_ms_total).toBe(d.final_ms_total - d.first_ms_total)
+})
+test('W14 latency: a mid-turn message gets its own tier and counts only tool calls after it arrived', async ($, on) => {
+  const { mem } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  const c = clockAt(on)
+  await $.prompt.submit({ text: 'compare the two drafts' } as any)
+  await $.turn.start(turn('t1'))
+  for (let i = 0; i < 4; i++) await $.tool.call(rd(i))
+  c.t += 2000
+  await $.tool.call(chk(CLEAN)); await $.tool.call(send(CLEAN)); c.t += 1000
+  await $.prompt.submit({ text: 'thanks', turnId: 't1', origin: { kind: 'bridge' } } as any); c.t += 1000
+  await $.tool.call(rd(8)) // denied by the mid-turn block (pending message): not counted
+  await $.tool.call(chk('Noted. Two done.')); await $.tool.call(send('Noted. Two done.')); await $.tool.call(rd(9)); c.t += 1000
+  await $.turn.complete(end('t1', 'Nothing to add.'))
+  const d = latRow(mem)
+  // task: final 5000, first 2000, p 3000, 5 tools; ack: final 2000, first 1000, p 1000, 1 tool
+  expect(d.lat_task1).toMatchObject({ n: 1, t: 5000, f: 2000, p: 3000, tools_total: 5, words_total: 3 })
+  expect(d.lat_ack).toMatchObject({ n: 1, t: 2000, f: 1000, p: 1000, tools_total: 1, words_total: 3 })
+  expect(d.post_first_ms_total).toBe(4000)
+})
+test('W14 latency: a Stop re-check correction 20 s later lands in post_first and its tier', async ($, on) => {
+  const { mem } = deepEngine(on, false)
+  envBox(on, { CLAUDE_CODE_SESSION_ATTENDED: '1' })
+  const c = clockAt(on)
+  await jTurnStart($, 'is the zip ready?', 'a1')
+  c.t += 4000
+  expect(((await ($ as any).classic.Stop({ stop_hook_active: false, last_assistant_message: 'Yes, it is.' })) as any).block).toBe(STOP_RECHECK)
+  await $.turn.complete(end('a1', 'Yes, it is.'))
+  c.t += 20000
+  await $.turn.start({ text: `[dispatch-guard] ${STOP_RECHECK}`, turnId: 'lt2' } as any)
+  await $.turn.complete(end('lt2', 'Correction: the zip is not ready.'))
+  const d = latRow(mem)
+  expect(d.post_first_ms_total).toBe(20000)
+  expect(d.lat_question).toEqual({ t: 24000, n: 1, f: 4000, c: 0, p: 20000, tools_total: 0, words_total: 6 })
+})
+test('W14 statsRow: state without the W14 fields (pre-W14) -> totals as before, tiers zero, row stays small', () => {
+  const row = statsRow('s', '2026-11-13', { date: '2026-11-13', prompts: 1, firstPass: 1, rounds: 0, unchecked: 0, jc: 0, jok: 0, jun: 0, tin: 0, tout: 0, tcache: 0, eRounds: 0, eFail: false, fc: {}, dh: {}, ds: {}, tms: 0, tn: 0, tmax: 0, jms: 0, crms: 0, fs: [1000], fl: 4000, frms: 0, frn: 0, frmax: 0, fims: 3000, cms: 0 } as any)
+  expect(row).toMatchObject({ final_count: 1, final_ms_total: 3000, post_first_ms_total: 0, lat_ack: Z, lat_question: Z, lat_task1: Z, lat_taskN: Z })
+  expect(JSON.stringify({ a: row.lat_ack, b: row.lat_question, c: row.lat_task1, e: row.lat_taskN, d: row.post_first_ms_total }).length).toBeLessThan(400)
+})
+test('W14 judgeLetters: letter keys from judge problems only; (a|b) gives both; unlettered and non-judge give none', () => {
+  const P = (id: string, text: string) => ({ id, text })
+  expect(judgeLetters([P('judge', 'judge: (c) offers instead of doing'), P('judge', 'judge: (a|b) "done" with no evidence'), P('judge', 'judge: something vague'), P('style', 'judge: (d) x'), P('judge', 'judge: e) y')]))
+    .toEqual(['judge:c', 'judge:a', 'judge:b', 'judge:e'])
+})
+test('W14 deep-stats: a failed judge round counts fail_checks judge (total) and judge:<letter>, once per round', async ($, on) => {
+  const { mem, judge } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  clockAt(on)
+  let n = 0
+  judge.reply = () => (++n === 1 ? { ...JUDGE_OK, text: JSON.stringify({ ok: false, problems: ['(c) offers the fix instead of doing it', '(c) leaves the test unrun', '(d) the question is not answered'] }) } : JUDGE_OK)
+  await $.prompt.submit({ text: 'fix it' } as any)
+  await $.turn.start(turn('t1'))
+  await $.tool.call(chk(CLEAN)); await $.tool.call(chk(CLEAN))
+  await $.turn.complete(end('t1', CLEAN))
+  expect(latRow(mem).fail_checks).toMatchObject({ judge: 1, 'judge:c': 1, 'judge:d': 1 })
 })
