@@ -2,6 +2,7 @@
 
 One line per version, newest first. Every version bump adds its line here in the same commit. Sources: version comments in hooks/*.ts, README 0.6.x sections, git log. "no record" = no comment, README text or commit names that version.
 
+- 0.6.34: Scoreboard rows flow again: writes to existing rows carry their version, so stats and corrections stop getting stuck, and one refused row no longer blocks the rest; short corrections of the form X is Y, not Z skip the closure check; fix hints name a file already written this turn.
 - 0.6.33: reply-latency stats: the time from each J message to its final visible answer (corrections and Stop re-check included) is recorded as final_ms_total/final_count/final_ms_max, with first_ms_total and check_ms_total alongside.
 - 0.6.32: 0.6.30 to 0.6.32 batch: the judge checks only the current ask, earlier asks shown as already answered; missing-lookup denials name the exact lookup per claim type; undone-work denials name the exact call per line (Agent launch, send_later, or the write to make) and the ending that passes; short corrections (25 words or fewer, no miss admitted, no figure swapped) skip the full Prevention/Why block.
 - 0.6.31: 0.6.30 + 0.6.31 batch: the judge checks only the current ask, earlier asks shown as already answered; missing-lookup denials name the exact lookup per claim type (version, status, figure, time, link), and the hook reads versions, clock and local files itself into the deny text; same drafts still fail first.

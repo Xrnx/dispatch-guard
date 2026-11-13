@@ -1069,18 +1069,100 @@ export async function corrFlush($: EngineInterface): Promise<number> {
   corrBusy = true
   try { return await corrSend($) } finally { corrBusy = false }
 }
+// W11 pins: ArtifactData refuses a write to an existing document that carries no if_version (or a stale one), and one refused entry
+// refuses the whole batch (the error names the first such entry, and the current version for a stale pin). So every confirmed write's
+// version is kept in CORR_VER_KEY (`<collection>/<doc_id>` -> {v, at}) and pins that doc's next write (deep-stats upserts, the fixes
+// version row). On a refusal the named entry's version comes from the error (else one `get`) and the batch is retried once with it;
+// an entry still refused, or one the error does not name (the batch is then halved), is left out so the rest land, and stays queued.
+const CORR_VER_KEY = 'corrVersions'
+export const CORR_VER_TTL_MS = 48 * 3_600_000 // a deep-stats doc id carries its SGT date, so it is not rewritten after its day
+export const CORR_VER_KEEP = 300
+export const FLUSH_CALLS = 10 // ArtifactData calls per flush (batches and gets)
+export type VerMap = Record<string, { v: number; at: number }>
+const vkey = (collection: string, id: string): string => `${collection}/${id}`
+const CONFIRMED = /\b(?:set|update)\s+"([^"]+)"\s*\/\s*"([^"]+)"\s*\(version\s+(\d+)\)/g
+// Writes a batch result confirms: `set "<collection>"/"<doc_id>" (version N)`.
+export const confirmedWrites = (text: string): { key: string; v: number }[] =>
+  [...text.matchAll(CONFIRMED)].map(m => ({ key: vkey(m[1] ?? "", m[2] ?? ""), v: Number(m[3]) }))
+const REFUSED = /refus|reject|nothing (?:was )?written|wrote nothing|not written|conflict|precondition|version mismatch|stale|changed since|already exists|(?:requires?|without|no|missing) (?:an? )?if_version/i
+const ID_CHARS = 'A-Za-z0-9_\\-.~:@+'
+const escRx = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+// The entry a refused batch names (the earliest-mentioned doc id of the batch) and the current version the error gives, if any.
+export const refusedEntry = (text: string, ids: readonly string[]): { id: string; v?: number } | undefined => {
+  let best: { id: string; at: number } | undefined
+  for (const id of ids) {
+    const m = new RegExp(`(?<![${ID_CHARS}])${escRx(id)}(?![${ID_CHARS}])`).exec(text)
+    if (m !== null && (best === undefined || m.index < best.at)) best = { id, at: m.index }
+  }
+  if (best === undefined) return undefined
+  const tail = text.slice(best.at + best.id.length, best.at + best.id.length + 240)
+  const m = /(?:current(?:ly)?|now|latest|is at|exists at|actual)\D{0,24}?(\d+)/i.exec(tail) ?? /(?<!if_)\bversion\D{0,4}(\d+)/i.exec(tail)
+  return m === null ? { id: best.id } : { id: best.id, v: Number(m[1]) }
+}
+// Drop map entries older than the TTL unless their doc is still queued; keep the newest CORR_VER_KEEP.
+export const pruneVers = (m: VerMap, queued: readonly { id: string; collection?: string }[], now: number): VerMap => {
+  const live = new Set(queued.map(q => vkey(q.collection ?? 'corrections', q.id)))
+  const kept = Object.entries(m).filter(([k, e]) => live.has(k) || now - e.at <= CORR_VER_TTL_MS).sort((a, b) => b[1].at - a[1].at).slice(0, CORR_VER_KEEP)
+  return Object.fromEntries(kept)
+}
+type CorrWrite = { op: 'set'; collection: string; doc_id: string; data: unknown; if_version?: number }
+type CorrRan = { deny?: string; isError?: boolean; text?: string }
 async function corrSend($: EngineInterface): Promise<number> {
   const queue = await corrQueue($)
   if (queue.length === 0) return 0
-  const writes = queue.slice(0, 50).map(q => ({ op: 'set', collection: q.collection ?? 'corrections', doc_id: q.id, data: q.data })) // 0.6.29: a row may name its collection (fixes)
-  const input = { action: 'batch', url: SCOREBOARD_URL, writes }
-  const { decision } = await $.tool.check({ tool: 'ArtifactData', input } as never)
+  const now = await nowMs($)
+  const stored = await $.store.get(CORR_VER_KEY)
+  const vers: VerMap = pruneVers(stored !== null && typeof stored === 'object' && !Array.isArray(stored) ? stored as VerMap : {}, queue, now)
+  const writes: CorrWrite[] = queue.slice(0, 50).map(q => ({ op: 'set', collection: q.collection ?? 'corrections', doc_id: q.id, data: q.data })) // 0.6.29: a row may name its collection (fixes)
+  const pin = (w: CorrWrite): CorrWrite => { const p = vers[vkey(w.collection, w.doc_id)]; return p === undefined ? w : { ...w, if_version: p.v } }
+  const batch = (ws: CorrWrite[]) => ({ action: 'batch', url: SCOREBOARD_URL, writes: ws.map(pin) })
+  const { decision } = await $.tool.check({ tool: 'ArtifactData', input: batch(writes) } as never)
   if (decision !== 'allow') return 0
-  const ran = await $.tool.call({ tool: 'ArtifactData', ...input } as never) as { deny?: string; isError?: boolean }
-  if (ran.deny !== undefined || ran.isError) return 0
-  const sent = new Map(writes.map(w => [w.doc_id, JSON.stringify(w.data)]))
-  await $.store.set(CORR_KEY, (await corrQueue($)).filter(q => !sent.has(q.id) || JSON.stringify(q.data) !== sent.get(q.id))) // an entry upserted during the send stays queued
-  return writes.length
+  let budget = FLUSH_CALLS
+  const sent = new Map<string, string>()
+  const repinned = new Set<string>()
+  const lookup = async (w: CorrWrite): Promise<number | undefined> => {
+    const input = { action: 'get', url: SCOREBOARD_URL, collection: w.collection, doc_id: w.doc_id }
+    if (budget <= 0 || (await $.tool.check({ tool: 'ArtifactData', input } as never)).decision !== 'allow') return undefined
+    budget--
+    const got = await $.tool.call({ tool: 'ArtifactData', ...input } as never) as CorrRan
+    if (got.deny !== undefined || got.isError) return undefined
+    const m = /"version"\s*:\s*(\d+)|\bversion\D{0,4}(\d+)/i.exec(String(got.text ?? ''))
+    return m === null ? undefined : Number(m[1] ?? m[2])
+  }
+  const send = async (ws: CorrWrite[]): Promise<void> => {
+    if (ws.length === 0 || budget <= 0) return
+    budget--
+    const ran = await $.tool.call({ tool: 'ArtifactData', ...batch(ws) } as never) as CorrRan
+    if (ran.deny !== undefined) { budget = 0; return }
+    const text = String(ran.text ?? '')
+    const ok = confirmedWrites(text)
+    for (const c of ok) vers[c.key] = { v: c.v, at: now }
+    const okKeys = new Set(ok.map(c => c.key))
+    const refused = REFUSED.test(text.replace(CONFIRMED, ''))
+    if (!ran.isError && !refused) { for (const w of ws) sent.set(w.doc_id, JSON.stringify(w.data)); return }
+    for (const w of ws) if (okKeys.has(vkey(w.collection, w.doc_id))) sent.set(w.doc_id, JSON.stringify(w.data)) // applied one at a time before the refusal
+    if (!refused) { budget = 0; return } // not a write refusal (service down): retry next flush
+    const rest = ws.filter(w => !okKeys.has(vkey(w.collection, w.doc_id)))
+    const bad = refusedEntry(text, rest.map(w => w.doc_id))
+    if (bad === undefined) { // unnamed: halve until the bad entry is alone
+      if (rest.length > 1) { const h = Math.ceil(rest.length / 2); await send(rest.slice(0, h)); await send(rest.slice(h)) }
+      return
+    }
+    const w = rest.find(x => x.doc_id === bad.id) as CorrWrite
+    const k = vkey(w.collection, w.doc_id)
+    if (!repinned.has(k)) {
+      repinned.add(k)
+      const v = bad.v ?? await lookup(w)
+      if (v !== undefined && v !== vers[k]?.v) { vers[k] = { v, at: now }; await send(rest); return }
+    }
+    await send(rest.filter(x => x !== w)) // left out: stays queued for the next flush
+  }
+  try { await send(writes) } finally {
+    await $.store.set(CORR_VER_KEY, pruneVers(vers, await corrQueue($), now))
+    await $.store.set(CORR_KEY, (await corrQueue($)).filter(q => !sent.has(q.id) || JSON.stringify(q.data) !== sent.get(q.id))) // an entry upserted during the send stays queued
+  }
+  return sent.size
 }
 // A card from any hook version (header "Orchestrator card (", heading "# Orchestrator") already in the chat counts as loaded.
 // An unreadable chat counts as loaded: a false alarm costs more than a missed one.
@@ -1309,12 +1391,16 @@ const DEEP_OFFER = /\b(want me to|shall I|if you'?d like|say so|say the word|let
 // 0.6.25 closure-line (J, 13 Nov): each Efficiency/Prevention/Correction line that names a change states its closure. Returns [line snippet, why] per miss.
 // `changed` = a real change ran this turn (code/file edit, memory write outside handoffs/open items, skill proposal, Artifact publish, non-log ArtifactData write);
 // `launch` = an agent/job launched this turn. Pattern keys live in the pack check `closure-line`.
+// W5: "that prevention is a written rule in my job queue, not an automatic check." A present-tense "is/are ..., not ..." restatement; deferral, future or modal words exclude it.
+const LIGHT_RESTATE = /\b(?:is|are|was|were)\b[^.\n]{1,60}?,?\s+not\s+(?:a|an|the|my|your|its)?\s*\w/i
+const LIGHT_DEFER = /\b(?:parked|proposal|waiting|queued|later|next (?:build|plugin|zip|version|release|session)|handoff|hand-off|backlog|pending|to-?do|tomorrow|follow-?up|will|would|could|should|going to|from now on|next time|once|until)\b|\w['\u2019]ll\b/i
 export const closureMisses = (text: string, f: { changed?: boolean; launch?: boolean }): [string, string][] => {
   const p = (k: string): RegExp => rx('closure-line', k)
   const out: [string, string][] = []
   for (const line of proseLines(text)) {
     const m = p('label').exec(line)
     if (m === null || (lightCorrection(line) && LIGHT_STATUS.test(line) && !/\b(?:parked|proposal|waiting|queued|later|next (?:build|plugin|zip)|handoff|backlog|will|would|could)\b/i.test(line))) continue // 0.6.32 W6: a light Correction that only states what is not yet built/seen names no change to close
+    if (lightCorrection(line) && LIGHT_RESTATE.test(line) && !LIGHT_DEFER.test(line)) continue // W5 (live 0.6.32, 13 Nov 15:14/15:16): a light Correction that restates what a thing is ("X is Y, not Z") names no change to close; any deferral or future word keeps the check
     const body = String(m[1] ?? '').replace(/^[\s*_:]+/, '').trim()
     if (body === '' || /^none\b(?!\W*yet\b)/i.test(body) || !(p('change').test(body) || p('hindsight').test(body) || p('defer').test(body) || /\b(?:would|could|might)\b/i.test(body) || /^\W*Leap\b/i.test(line))) continue // hindsight, deferral, conditional and Leap ideas name a change too
     const snip = line.trim().slice(0, 80)
@@ -1470,6 +1556,8 @@ export const nextAction = (line: string, f: { acts?: Act[]; today?: string; clai
   if (p('offer').test(whole)) return { ...done('offer'), close: '— done in <the target written>; only if no tool here reaches it: "— needs J: <the blocker>"' }
   if (p('plan').test(whole) && !p('later').test(whole.replace(p('plan'), ''))) {
     if (launch !== undefined) return { line: l, kind: 'plan', call: `none: ${naHead(launch.tgt) || 'a job'} was launched this turn`, close: '— requested; <that job> running' }
+    const named = real.filter(t => { const stem = (t.split('/').pop() ?? '').replace(/\.[\w]+$/, '').toLowerCase(); return stem.length >= 3 && l.toLowerCase().includes(stem) }) // W5 (live 15:16): the line names a file this turn already wrote: no build agent
+    if (named.length > 0) return { line: l, kind: 'plan', call: `none: this turn already wrote ${named.join(', ')}; name that write on the line`, close: `— done in ${named[0]}` }
     return { line: l, kind: 'plan', call: `Agent({ run_in_background: true, description: "build: ${naWhat(body, 40)}", prompt: "<the rule, the file that must enforce it, the test>"${plan.length > 0 ? ` (brief: ${plan.join(', ')})` : ''} }), or make it now: ${write}`, close: '— requested; build agent running (launched this turn) | — done in <the target written>' }
   }
   if (p('later').test(body) || p('later').test(whole)) {
@@ -1943,9 +2031,9 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.33'
+export const PLUGIN_VERSION = '0.6.34'
 // 0.6.29 version row: this version's CHANGELOG line (tools/build-zip.sh fails unless CHANGELOG.md has "- <PLUGIN_VERSION>: <CHANGELOG_LINE>").
-export const CHANGELOG_LINE = 'reply-latency stats: the time from each J message to its final visible answer (corrections and Stop re-check included) is recorded as final_ms_total/final_count/final_ms_max, with first_ms_total and check_ms_total alongside.'
+export const CHANGELOG_LINE = 'Scoreboard rows flow again: writes to existing rows carry their version, so stats and corrections stop getting stuck, and one refused row no longer blocks the rest; short corrections of the form X is Y, not Z skip the closure check; fix hints name a file already written this turn.'
 export const FIX_CATEGORY = 'unchecked reply'
 export const VERSION_ROW_KEY = 'fixesRowVersion' // the last PLUGIN_VERSION whose fixes row was queued
 export const versionRow = (date: string, time: string): { id: string; collection: string; data: Record<string, unknown> } => ({ id: `f-auto-dg${PLUGIN_VERSION.replace(/\./g, '')}`, collection: 'fixes', data: { category: FIX_CATEGORY, date, kind: 'hook', status: 'landed', title: `dispatch-guard ${PLUGIN_VERSION} (auto)`, detail: `dispatch-guard ${PLUGIN_VERSION} first deep turn ${date} ${time} SGT: ${CHANGELOG_LINE}`, plugin_version: PLUGIN_VERSION, auto: true } })
