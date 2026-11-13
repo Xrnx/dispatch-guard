@@ -2,6 +2,7 @@
 
 One line per version, newest first. Every version bump adds its line here in the same commit. Sources: version comments in hooks/*.ts, README 0.6.x sections, git log. "no record" = no comment, README text or commit names that version.
 
+- 0.6.29: Stop re-check repeat loop fixed: short no-claim texts exempt, no second re-check in a chain after a PASS or sent correction, the app no-output nudge is not a J turn, footer-only re-check fails logged not sent to J; Scoreboard fixes row written on the first deep turn of a new version; eval cache left out of the zip.
 - 0.6.28: live-skip fixes (AB-0628c winner L): every unchecked Stop text counted, unattended split, Stop re-check once, AI judge on every unchecked SendUserMessage, routing still off; footer problems all reported in round 1 plus a deterministic claim-ahead check (a job still open from an earlier launch or the board), also on the SendUserMessage gate; 13 new tests.
 - 0.6.27: closure-line false alarms fixed (harness audit 13 Nov: 3 of 12 first-draft closure fails were false alarms): a reply that is itself the fix, an irreversible/J-only item, a memory or file write made this turn, and a job launched this turn (started/dispatched/relaunched/kicked off) now close the line; 5 unit tests, the real-miss case still fails.
 - 0.6.26: 0.6.25 minus its deep-line rewrite (harness 13 Nov: the 8-line checklist made 87.5% of replies skip check_reply vs 47.9% live; without it skip 45.8%, quality 0.663 vs 0.618); deep line back to the 0.6.24 text.

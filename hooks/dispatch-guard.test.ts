@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import { CARD } from './orchestrator-card'
 import { validatePack, bundledPackJson, BUNDLED_VERSION, mergePack, bundledRules } from './rulepack'
 import { closureMisses, evidenceFirstHit, evidenceCall, realChange, deepCategory, jRow, corrRow, prefilterLines, repeatedLines } from './register'
-import { MISSING_LINE, sessionBlock, SESSION_INDEX_KEY, KEEP_SESSIONS, problemLabel, SET_RULES_TOOL, RULES_KEY, deepLine, setRules, cleanProblem, deepRow, tokensOf, JUDGE_TOKENS_KEY, judgeRules, skipJudge, denyCap, modeCommand, deepProblems, missingEfficiency, deepMissingLeap, replyHash, CHECK_TOOL, MODE_KEY, DENY_LOG_KEY, CAUGHT_KEY, JUDGE_KEY, JUDGE_RULES, parseJudge, DEEP_LINE, DEEP_DARK, CHECK_SPEC, stubOutput, undefinedLabels, questionOnly, redrafts, missingLeap, uncomputed, numbersIn, nonPreventions, startsWork, answersFirst, scopePhrases, asksJ, buriedAsks, promises, parkedFix, foregroundWait, offers, RELAY_AT, longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, jText, reasks, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL, clockStamp, danglingRefs, isJ, knowableAsks, inputAsk, workMade, draftGap, missUnlanded, fixEvidence, settleRow, absoluteClaims, openQuestions, PLUGIN_VERSION, sourceGate, efficiencyFix, STATS_KEY, statsRow, DARK_SAMPLES_CAP, STOP_RECHECK, SEND_JUDGE, SEND_ROUTE, ROUTE_LINE, statsJudge, STYLE_PROBLEM, inputDigest, keywordList, stateClaim } from './register'
+import { MISSING_LINE, sessionBlock, SESSION_INDEX_KEY, KEEP_SESSIONS, problemLabel, SET_RULES_TOOL, RULES_KEY, deepLine, setRules, cleanProblem, deepRow, tokensOf, JUDGE_TOKENS_KEY, judgeRules, skipJudge, denyCap, modeCommand, deepProblems, missingEfficiency, deepMissingLeap, replyHash, CHECK_TOOL, MODE_KEY, DENY_LOG_KEY, CAUGHT_KEY, JUDGE_KEY, JUDGE_RULES, parseJudge, DEEP_LINE, DEEP_DARK, CHECK_SPEC, stubOutput, undefinedLabels, questionOnly, redrafts, missingLeap, uncomputed, numbersIn, nonPreventions, startsWork, answersFirst, scopePhrases, asksJ, buriedAsks, promises, parkedFix, foregroundWait, offers, RELAY_AT, longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, jText, reasks, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL, clockStamp, danglingRefs, isJ, knowableAsks, inputAsk, workMade, draftGap, missUnlanded, fixEvidence, settleRow, absoluteClaims, openQuestions, PLUGIN_VERSION, sourceGate, efficiencyFix, STATS_KEY, statsRow, DARK_SAMPLES_CAP, STOP_RECHECK, SEND_JUDGE, SEND_ROUTE, ROUTE_LINE, statsJudge, STYLE_PROBLEM, inputDigest, keywordList, stateClaim, stopShort, footerOnly, NO_OUTPUT_NUDGE, versionRow, VERSION_ROW_KEY, CHANGELOG_LINE } from './register'
 
 const TURN = /4th tool call this turn/
 const BASH = /Foreground Bash builds\/tests\/installs\/clones\/waits/
@@ -3017,7 +3017,7 @@ test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft pas
   expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
   expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 1, judge_ok: 1, judge_unavailable: 0, tokens_in: 100, tokens_out: 20, tokens_cache: 50 })
   expect(Object.values(d.fail_checks).reduce((a: number, b: any) => a + b, 0)).toBeGreaterThanOrEqual(2) // 0.6.22: the two failed BADC rounds are counted by check id
-  expect(PLUGIN_VERSION).toBe('0.6.28')
+  expect(PLUGIN_VERSION).toBe('0.6.29')
 })
 test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
   const { mem } = deepEngine(on, true)
@@ -4178,3 +4178,88 @@ test('0.6.28 routing line: off by default (needs a harness A/B); when on it ride
   expect(ROUTE_LINE).toMatch(/SendUserMessage/)
 })
 
+
+// 0.6.29 Stop re-check repeat loop (J 12:40, live 13 Nov 12:37-12:42): PASS -> no-text -> app nudge -> filler -> re-check -> filler ...
+const NUDGE = '[Your previous response had no visible output. Please continue and produce a user-visible response.]'
+const FOOT = `Result: the build is ready.\n${Array.from({ length: 8 }, (_, i) => `- point ${i} with several more plain words in it`).join('\n')}`
+test('0.6.29 fix a: the Stop re-check honours the short-reply exemption even when J asked a yes/no question', async ($, on) => {
+  deepEngine(on, false)
+  envBox(on, { CLAUDE_CODE_SESSION_ATTENDED: '1' })
+  expect(stopShort('Carrying on in the background.')).toBe(true)
+  expect(stopShort('Yes, it is.')).toBe(false) // a yes/no answer
+  expect(stopShort('No.')).toBe(false)
+  expect(stopShort('It passed the check.')).toBe(false) // claim word
+  expect(stopShort(LONGW)).toBe(false)
+  await jTurnStart($, 'is the zip ready?', 'a1')
+  expect(((await ($ as any).classic.Stop({ stop_hook_active: false, last_assistant_message: 'Carrying on in the background.' })) as any).block).toBeUndefined()
+  expect(((await ($ as any).classic.Stop({ stop_hook_active: false, last_assistant_message: 'Yes, it is.' })) as any).block).toBe(STOP_RECHECK)
+})
+test('0.6.29 fix b: replay of the observed chain (block, PASS, no text, app nudge, filler) never re-blocks', async ($, on) => {
+  const { judge } = deepEngine(on, false)
+  judge.reply = JUDGE_OK
+  envBox(on, { CLAUDE_CODE_SESSION_ATTENDED: '1' })
+  await jTurnStart($, 'when are we getting back a version without the weird repeats', 'b1')
+  await $.tool.call({ tool: 'Read', file_path: '/x' } as any)
+  expect(((await ($ as any).classic.Stop({ stop_hook_active: false, last_assistant_message: LONGW })) as any).block).toBe(STOP_RECHECK)
+  expect(((await $.tool.call(chk(LONGW))) as any).result).toMatch(/^PASS /)
+  expect(STOP_RECHECK).toMatch(/at most 8 words/)
+  expect(NO_OUTPUT_NUDGE.test(NUDGE)).toBe(true)
+  await jTurnStart($, NUDGE, 'b2') // the app's nudge: not J, no new epoch
+  for (const filler of ["It passed the check, so there's nothing to add", 'Carrying on in the background.', `${LONGW} filler`]) {
+    expect([filler, ((await ($ as any).classic.Stop({ stop_hook_active: false, last_assistant_message: filler })) as any).block]).toEqual([filler, undefined])
+  }
+})
+test('0.6.29 fix b: the nudge inside the same turn, or after a sent correction, is not re-blocked; the next J prompt re-arms the re-check', async ($, on) => {
+  const { judge } = deepEngine(on, false)
+  judge.reply = JUDGE_OK
+  envBox(on, { CLAUDE_CODE_SESSION_ATTENDED: '1' })
+  await jTurnStart($, 'why?', 'b3')
+  expect(((await ($ as any).classic.Stop({ stop_hook_active: false, last_assistant_message: LONGW })) as any).block).toBe(STOP_RECHECK)
+  const sr = await $.tool.call(send('Point 3 should read: point 3 is x.')) as any
+  expect(sr.deny).toBeUndefined()
+  expect(((await ($ as any).classic.Stop({ stop_hook_active: true, last_assistant_message: `${LONGW} more` })) as any).block).toBeUndefined()
+  await $.turn.complete(end('b3', `${LONGW} more`))
+  await jTurnStart($, 'and now?', 'b4')
+  expect(((await ($ as any).classic.Stop({ stop_hook_active: false, last_assistant_message: `${LONGW} again` })) as any).block).toBe(STOP_RECHECK)
+})
+test('0.6.29 fix c: a re-check failing only on footer lines is logged to stats and passed silently; a substantive problem still asks for a correction', async ($, on) => {
+  const { mem, judge } = deepEngine(on, false)
+  judge.reply = JUDGE_OK
+  envBox(on, { CLAUDE_CODE_SESSION_ATTENDED: '1' })
+  await jTurnStart($, 'why?', 'c1')
+  await $.tool.call({ tool: 'Read', file_path: '/x' } as any)
+  expect(((await ($ as any).classic.Stop({ stop_hook_active: false, last_assistant_message: FOOT })) as any).block).toBe(STOP_RECHECK)
+  const r = String(((await $.tool.call(chk(FOOT))) as any).result)
+  expect(r).toMatch(/^PASS \S+ \(Stop re-check: footer-line gaps only, logged/)
+  expect(r).not.toMatch(/Correction/)
+  const st = Object.entries(mem).find(([k]) => k.startsWith('deepStats:'))?.[1] as any
+  expect(Object.keys(st.dh).some(k => k.startsWith('recheck-footer:'))).toBe(true)
+  expect(((await ($ as any).classic.Stop({ stop_hook_active: true, last_assistant_message: 'Nothing to add.' })) as any).block).toBeUndefined()
+  // substantive: a judge problem is never footer-only
+  expect(footerOnly([{ id: 'leap-line', text: 'x' }, { id: 'judge', text: 'judge: (b) unsupported' }])).toBe(false)
+  expect(footerOnly([{ id: 'closure-line', text: 'closure: "Correction: fixed later" (later/queued)' }])).toBe(false)
+  expect(footerOnly([{ id: 'closure-line', text: 'closure: "**Efficiency:** later" (later/queued)' }, { id: 'efficiency-none', text: 'y' }])).toBe(true)
+  expect(footerOnly([])).toBe(false)
+})
+test('0.6.29 fix c: a non-re-check draft failing on footer lines still fails as before (no check loosened)', async ($, on) => {
+  const { judge } = deepEngine(on, false)
+  judge.reply = JUDGE_OK
+  await jTurnStart($, 'why?', 'c2')
+  await $.tool.call({ tool: 'Read', file_path: '/x' } as any)
+  expect(String(((await $.tool.call(chk(FOOT))) as any).result)).toMatch(/^Deep mode: fix these/)
+})
+test('0.6.29 fix d: the first deep J turn on a new version queues one Scoreboard fixes row; later turns do not', async ($, on) => {
+  const { mem, judge } = deepEngine(on, false)
+  judge.reply = JUDGE_OK
+  envBox(on, { CLAUDE_CODE_SESSION_ATTENDED: '1' })
+  await jTurnStart($, 'why?', 'd1')
+  await $.turn.complete(end('d1', 'Noted.'))
+  await jTurnStart($, 'and?', 'd2')
+  await $.turn.complete(end('d2', 'Noted.'))
+  const rows = ((mem.corrLog as any[]) ?? []).filter(r => r.collection === 'fixes')
+  expect(rows.length).toBe(1)
+  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0629', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.29' } })
+  expect(rows[0].data.detail).toContain(CHANGELOG_LINE)
+  expect(mem[VERSION_ROW_KEY]).toBe('0.6.29')
+  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.29 (auto)')
+})

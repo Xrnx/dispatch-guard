@@ -909,7 +909,7 @@ const CATEGORIES: [RegExp, string][] = [
 ]
 export const corrCategory = (text: string): string => CATEGORIES.find(([re]) => re.test(text))?.[1] ?? 'unclassified'
 // Not J typing: agent messages, task notifications, hook continuations, slash commands.
-const NOT_J = /^\s*(<|\[dispatch-guard\]|Another Claude session|Stop hook feedback|The files from earlier)/
+const NOT_J = /^\s*(<|\[dispatch-guard\]|Another Claude session|Stop hook feedback|The files from earlier|\[?\s*Your previous response had no visible output\b)/ // 0.6.29: the app's no-output nudge is not J
 // 0.5.9: judge J's own text, not the raw prompt — the app prepends a <system-reminder> (current date) to J's messages,
 // so a raw-text NOT_J test (leading '<') wrongly read every J message as not-J (night nudge and corr-log never fired).
 export const isJ = (text: string): boolean => { const j = jText(String(text ?? '')); return j !== '' && !NOT_J.test(j) }
@@ -925,9 +925,9 @@ export const corrRow = (text: string, session: string, chat: string, now: number
   }
 }
 const corrId = (r: CorrRow, now: number): string => `auto-${r.session.slice(0, 8)}-${now.toString(36)}`
-async function corrQueue($: EngineInterface): Promise<{ id: string; data: CorrRow | HookRow }[]> {
+async function corrQueue($: EngineInterface): Promise<{ id: string; data: CorrRow | HookRow; collection?: string }[]> {
   const v = await $.store.get(CORR_KEY)
-  return Array.isArray(v) ? v as { id: string; data: CorrRow | HookRow }[] : []
+  return Array.isArray(v) ? v as { id: string; data: CorrRow | HookRow; collection?: string }[] : []
 }
 // 0.6.1 hook-fire rows: each time a check fires, one row (source "hook", check id, session, ISO time in SGT) joins the same queue and
 // flushes the same way (only where the permission check already says allow). No reply text, no client content.
@@ -1055,7 +1055,7 @@ export async function corrFlush($: EngineInterface): Promise<number> {
 async function corrSend($: EngineInterface): Promise<number> {
   const queue = await corrQueue($)
   if (queue.length === 0) return 0
-  const writes = queue.slice(0, 50).map(q => ({ op: 'set', collection: 'corrections', doc_id: q.id, data: q.data }))
+  const writes = queue.slice(0, 50).map(q => ({ op: 'set', collection: q.collection ?? 'corrections', doc_id: q.id, data: q.data })) // 0.6.29: a row may name its collection (fixes)
   const input = { action: 'batch', url: SCOREBOARD_URL, writes }
   const { decision } = await $.tool.check({ tool: 'ArtifactData', input } as never)
   if (decision !== 'allow') return 0
@@ -1255,7 +1255,19 @@ export const SEND_JUDGE = true
 export const SEND_ROUTE = false
 export const ROUTE_LINE = `Send every reply to J with SendUserMessage: it runs the same check before J sees it and holds a failing draft (check_reply first is optional and saves a round). After it goes out, end the turn with no text.`
 // 0.6.28: the Stop re-check (once per text): the reply reached J unchecked; check it now and send only a correction.
-export const STOP_RECHECK = `Deep mode: this reply reached J without a check_reply PASS. Call ${CHECK_TOOL} now with this exact reply as text. If it passes, end the turn with no text: J already has it. If it fails, send J only the correction (what was wrong, the fixed line) with SendUserMessage; never repeat the reply.`
+export const STOP_RECHECK = `Deep mode: this reply reached J without a check_reply PASS. Call ${CHECK_TOOL} now with this exact reply as text. If it passes, end the turn with no text: J already has it (if the app then asks for visible output, one line of at most 8 words with no claims, e.g. "Nothing to add."; it is not checked again). If it fails, send J only the correction (what was wrong, the fixed line) with SendUserMessage; never repeat the reply.`
+// 0.6.29 (J 12:40, repeat loop): the Stop re-check's own exemptions. A short text (under deep-judge minWords, no claim word, not a yes/no
+// answer) is never re-checked, whatever J asked; a re-check that fails only on footer lines is logged, not sent to J; the app's
+// no-visible-output nudge is not a J message (no new epoch, no J turn), so its forced filler is never re-checked.
+export const stopShort = (text: string): boolean => text.trim().split(/\s+/).length < num('deep-judge', 'minWords') && !rx('deep-judge', 'claim').test(text) && !/^\W*(?:yes|no)\b/i.test(text)
+export const RECHECK_FOOTER: ReadonlySet<string> = new Set(['efficiency-line', 'leap-line', 'efficiency-none', 'prevention-line', 'efficiency-fix', 'closure-line'])
+export const footerOnly = (probs: { id: string; text: string }[]): boolean => probs.length > 0 && probs.every(p => {
+  if (!RECHECK_FOOTER.has(p.id)) return false
+  if (p.id !== 'closure-line') return true
+  const snips = [...p.text.matchAll(/"([^"]*)" \(/g)].map(m => m[1])
+  return snips.length > 0 && snips.every(l => /^[\s*_>#-]*(?:efficiency|leap|prevention)\b/i.test(l)) // a Correction line's closure is substantive
+})
+export const NO_OUTPUT_NUDGE = /^\s*\[?\s*Your previous response had no visible output\b/i
 export const DEEP_LINE = `Deep mode: draft the reply, call ${CHECK_TOOL} with {text, ask, evidence} (ask = J's message this turn, verbatim; evidence = one line per claim: <claim> ← <source: tool + time, agent report + time, J's words, or inferred/estimate>) and fix every listed problem until it returns PASS <hash>, then write that exact text as your final reply: nothing before or after it. Write the draft only inside the check_reply call; no visible text before the final reply. A mid-turn message to J goes out with the SendUserMessage tool, only after check_reply passed that exact text. Rule checks require: **Efficiency:** and **Leap:** lines on substantive replies; Correction with Prevention and "Why you caught it:"; every figure and done-claim in evidence or labelled inferred/estimate/requested; no unchecked absolutes, open questions or offers.`
 export const replyHash = (t: string): string => { const n = String(t ?? '').replace(/\s+/g, ' ').trim(); return `${fnv8(n)}${n.length.toString(36)}` }
 export const modeSwitchLine = (m: ReplyMode): string => m === 'deep'
@@ -1758,7 +1770,22 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.28'
+export const PLUGIN_VERSION = '0.6.29'
+// 0.6.29 version row: this version's CHANGELOG line (tools/build-zip.sh fails unless CHANGELOG.md has "- <PLUGIN_VERSION>: <CHANGELOG_LINE>").
+export const CHANGELOG_LINE = 'Stop re-check repeat loop fixed: short no-claim texts exempt, no second re-check in a chain after a PASS or sent correction, the app no-output nudge is not a J turn, footer-only re-check fails logged not sent to J; Scoreboard fixes row written on the first deep turn of a new version; eval cache left out of the zip.'
+export const FIX_CATEGORY = 'unchecked reply'
+export const VERSION_ROW_KEY = 'fixesRowVersion' // the last PLUGIN_VERSION whose fixes row was queued
+export const versionRow = (date: string, time: string): { id: string; collection: string; data: Record<string, unknown> } => ({ id: `f-auto-dg${PLUGIN_VERSION.replace(/\./g, '')}`, collection: 'fixes', data: { category: FIX_CATEGORY, date, kind: 'hook', status: 'landed', title: `dispatch-guard ${PLUGIN_VERSION} (auto)`, detail: `dispatch-guard ${PLUGIN_VERSION} first deep turn ${date} ${time} SGT: ${CHANGELOG_LINE}`, plugin_version: PLUGIN_VERSION, auto: true } })
+// Queued once per version (store key), flushed with the corrections rows; a store failure skips it (logging never affects a turn).
+export async function queueVersionRow($: EngineInterface): Promise<boolean> {
+  try {
+    if (await $.store.get(VERSION_ROW_KEY) === PLUGIN_VERSION) return false
+    await $.store.set(VERSION_ROW_KEY, PLUGIN_VERSION)
+    const now = sgtIso(await nowMs($))
+    await enqueue($, [versionRow(now.slice(0, 10), now.slice(11, 16))])
+    return true
+  } catch { return false }
+}
 type Stats = { date: string; prompts: number; firstPass: number; rounds: number; unchecked: number; uu: number; att?: string; so?: string; jc: number; jok: number; jun: number; tin: number; tout: number; tcache: number; epoch?: string; eRounds: number; eFail: boolean; closed?: string; fc: Record<string, number>; dh: Record<string, number>; ds: Record<string, string[]>; tms: number; tn: number; tmax: number; jms: number; crms: number; eT0?: number; eT1?: number }
 export type StatsRow = { source: 'deep-stats'; date: string; session: string; plugin_version: string; prompts_judged: number; first_draft_pass: number; unchecked: number; unchecked_unattended: number; attended: string; session_origin: string; rounds_total: number; judge_calls: number; judge_ok: number; judge_unavailable: number; tokens_in: number; tokens_out: number; tokens_cache: number; fail_checks: Record<string, number>; dark_hits: Record<string, number>; dark_samples: Record<string, string[]>; turn_ms_total: number; turn_count: number; turn_ms_max: number; judge_ms_total: number; checker_rounds_ms_total: number }
 // 0.6.24 speed meter: wall ms turn.start -> turn.complete of deep J-prompt turns (total, count, max), judge call ms, and checker rounds ms (first to last check_reply round end, per prompt; a one-round prompt adds 0). Counts only.
@@ -2012,8 +2039,9 @@ export const register: Register = on => {
   let early = '' // 0.6.10: text known before the first work call — the turn's opening text plus SendUserMessage texts sent at work 0
 
   let epoch = '0' // one per J prompt (time + random, survives a reload): the per-draft failure count in the store belongs to one epoch
-  const newEpoch = (): void => { epoch = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`; denied = 0; countedUnchecked.clear(); stopBlocked.clear() }
+  const newEpoch = (): void => { epoch = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`; denied = 0; countedUnchecked.clear(); stopBlocked.clear(); stopChainDone = false }
   const countedUnchecked = new Set<string>() // 0.6.28: hashes of unchecked replies already counted this prompt (Stop and turn end see the same text)
+  let stopChainDone = false // 0.6.29: a Stop re-check passed, was footer-only or got its correction sent: no further Stop re-check until J's next prompt
   const stopBlocked = new Set<string>() // 0.6.28: hashes the Stop re-check already blocked once this prompt (never twice: no loop)
   let who: SessionWho | undefined // 0.6.28: read once per module load
   let turnResults = '' // this turn's tool results (tool + first 1500 chars each, last 6000 kept): the judge's hook evidence
@@ -2167,7 +2195,8 @@ export const register: Register = on => {
   on('classic.Stop', async ($, e, next) => {
     const last = String((e as Record<string, unknown>).last_assistant_message ?? '')
     if (last.trim() !== '' && finalPassed.has(replyHash(last))) return {}
-    if (last.trim() !== '' && jTurn && sendOk && !skipJudge(last, asked) && (await readMode($, mode)) === 'deep') {
+    if (stopChainDone) return {} // 0.6.29: the re-check already ran in this chain; a forced closing line is never re-blocked
+    if (last.trim() !== '' && jTurn && sendOk && !stopShort(last) && (await readMode($, mode)) === 'deep') {
       const h = replyHash(last)
       who ??= await sessionWho($)
       if (!countedUnchecked.has(h)) { countedUnchecked.add(h); await statsUnchecked($, who) }
@@ -2304,10 +2333,19 @@ export const register: Register = on => {
       const jr = pre.length > 0 || ruleFirst || skipJudge(text, f.asked || String(x.ask ?? '')) ? undefined : await judgeReply($, text, askNote(f.asked || String(x.ask ?? '').trim(), mc === undefined && delivered.length > 0), sentEvidence(String(x.evidence ?? '')), turnResults, f)
       const g = await deepGate($, text, f, denied, epoch, jr === undefined || jr.status === 'unavailable' ? undefined : { problems: jr.problems.map(t => ({ id: 'judge', text: `judge: ${t}` })) }, atCap && jr === undefined, pre, mc)
       denied = g.denied
+      const recheck = stopBlocked.has(replyHash(text))
+      // 0.6.29: a Stop re-check (J already has the text) failing only on footer lines is logged to stats, never sent to J as a correction.
+      if (recheck && g.probs.length > 0 && footerOnly(g.probs)) {
+        await statsDark($, g.probs.map(p => ({ id: `recheck-footer:${p.id}`, snip: p.text.slice(0, 160) })))
+        stopChainDone = true
+        finalPassed.add(replyHash(text))
+        return { result: `PASS ${replyHash(text)} (Stop re-check: footer-line gaps only, logged; J already has the reply. End the turn with no text; send J nothing about it.)` }
+      }
       if (g.probs.length > 0 && !g.capped) return { result: `Deep mode: fix these, then call check_reply again (${g.denied}/${cap}): ${numbered(g.probs)}` }
       const holdNote = atCap && jr === undefined && !g.capped ? `Deep mode: sent at the ${cap}-failure cap; the judge was skipped for this draft.` : ''
       passed.set(replyHash(text), g.capped ? capNote(g.probs, cap) : holdNote)
       finalPassed.add(replyHash(text))
+      if (recheck) stopChainDone = true // 0.6.29: re-check passed: nothing after it in this chain is re-checked
       savePass = true
       if (passed.size > 50) passed.delete(passed.keys().next().value!)
       const midTag = mc === undefined || !g.capped ? '' : ' (mid-turn reply: one check round only; tag these open problems in the reply, then send it)'
@@ -2427,6 +2465,7 @@ export const register: Register = on => {
     // 0.6.0: event triggers in place of the 8-call silence count and the 4th-call count.
     if (e.tool === 'SendUserMessage') {
       replied = true
+      if (stopBlocked.size > 0) stopChainDone = true // 0.6.29: the re-check's correction went out: the chain ends here
       midQ = sendable ? midQ.filter(m => m.seq > seenSeq) : [] // answered: every message the model had seen; a later one stays pending (nudge-only sessions: all, as before)
       midPending = midQ.length > 0
       midDenied = 0
@@ -2555,6 +2594,7 @@ export const register: Register = on => {
     const finalText = String(e.answer ?? '').trim() !== ''
     const isDeep = jTurn && sendOk && finalText && (await readMode($, mode)) === 'deep'
     const skipDeep = isDeep && finalPassed.has(replyHash(e.answer)) // already checked pre-send by the same checks: no double count, no carry line
+    if (isDeep) await queueVersionRow($) // 0.6.29: first deep J turn on a new version writes its Scoreboard fixes row
     if (skipDeep) markLines(e.answer)
     if (isDeep && !skipDeep) {
       await Promise.resolve().then(async () => {

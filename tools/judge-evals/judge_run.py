@@ -51,7 +51,7 @@ def call(rules,c,rep):
     ms=int((time.time()-t)*1000)
     v=parse(out)
     r={'verdict':v,'ms':ms,'raw':out[:500]}
-    if v is not None: json.dump(r,open(cp,'w'))   # only cache parsed answers
+    if v is not None: os.makedirs(os.path.dirname(cp),exist_ok=True); json.dump(r,open(cp,'w'))   # only cache parsed answers (0.6.29: the cache dir does not ship)
     r['cached']=False; return r
 def tags(v): return [m.group(1).lower() for p in v['problems'] for m in [re.match(r'^\s*\(?([a-f])\)',p,re.I)] if m]
 def run(rules_file,reps,tag=''):
