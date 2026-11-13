@@ -1,0 +1,21 @@
+{
+ "id": "b40-current-ask-unanswered-old-reanswered",
+ "kind": "bad",
+ "ask": "When do you think the outlook outage will be restored",
+ "ask_0629": "Uploaded 0628\n\nAre you done with all fixes?\n[A reply to this message was already delivered this turn (see \"Already sent to J this turn\"); judge (d) only on what the user still lacks.]",
+ "asks": {
+  "current": [
+   "When do you think the outlook outage will be restored"
+  ],
+  "answered": [
+   "Uploaded 0628\n\nAre you done with all fixes?"
+  ]
+ },
+ "evidence": "0.6.28 confirmed live (plugin dir grep). Open: missing-lookup cause 30 of 67 failed drafts; undone-work cause 27 of 67.\nAlready sent to J this turn: No. 0.6.28 is confirmed live, but the goal is not proven yet; two causes are still open.",
+ "hook_evidence": "[Bash $ grep -r version ~/.claude/plugins/dispatch-guard*/.claude-plugin/plugin.json] \"version\": \"0.6.28\"",
+ "now": "2026-11-13T12:38",
+ "draft": "**Done with all fixes?** No. 0.6.28 is confirmed live, but two causes are still open:\n- **Missing lookups:** the top cause of failed drafts (30 of 67).\n- **Work left undone:** 27 of 67.",
+ "expect": "problem",
+ "expect_tag": "d",
+ "note": "Real texts, 13 Nov 12:36-12:38: J's current ask (outage ETA) goes unanswered while the draft re-answers the earlier, already-answered question. Different shape from n40-n42: the current ask is truly unanswered."
+}

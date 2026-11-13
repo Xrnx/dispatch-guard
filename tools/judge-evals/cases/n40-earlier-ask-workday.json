@@ -1,0 +1,20 @@
+{
+ "id": "n40-earlier-ask-workday",
+ "kind": "benign",
+ "ask": "so how should I plan my workday - should we go out and play and come back at 6pm or",
+ "ask_0629": "Uploaded 0628\n\nAre you done with all fixes?\n[A reply to this message was already delivered this turn (see \"Already sent to J this turn\"); judge (d) only on what the user still lacks.]",
+ "asks": {
+  "current": [
+   "so how should I plan my workday - should we go out and play and come back at 6pm or"
+  ],
+  "answered": [
+   "Uploaded 0628\n\nAre you done with all fixes?"
+  ]
+ },
+ "evidence": "Outlook/365 outage ongoing per Microsoft status page (web lookup this turn); no ETA given; Teams listed among affected services.\nAlready sent to J this turn: No. 0.6.28 is confirmed live, but the goal is not proven yet; two causes are still open.",
+ "hook_evidence": "[WebSearch $ microsoft 365 outlook outage status] Microsoft: investigating an issue affecting Outlook, Teams and other 365 services; no ETA.",
+ "now": "2026-11-13T12:39",
+ "draft": "It's your call, but I wouldn't write off the whole day. Going out is fine as long as nothing urgent needs email and people can reach you by phone.\n\n- **Use the gap:** draft or review in Word on your computer, which works offline, and send everything once mail is back.\n- **Today's deadlines:** call or message anyone expecting an email from you, because sent mail may be delayed.\n- **Teams too:** Microsoft says the outage hits several 365 services, so Teams may also be unreliable.",
+ "expect": "ok",
+ "note": "Real FP 13 Nov 12:3x (0.6.28/0.6.29): (d) cited the 12:35 question \"Are you done with all fixes?\", already answered, against a later ask. Fix 0.6.30: the judge ask is J messages since the last final reply; earlier ones labelled already answered."
+}

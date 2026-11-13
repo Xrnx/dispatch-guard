@@ -19,11 +19,26 @@ def prefilter_note(draft,changed):
     return '' if not ls else '\nPre-filter (deferral words, no change or launch this turn; check each under (e)): '+'; '.join(f'"{l}"' for l in ls)
 def now_part(c):  # 0.6.25: mirrors the clock/zone clause judgeReply adds to the hook facts; cases without "now" keep the old layout
     return f"now {c['now']}+08:00 (the user's local time, UTC+8; times in session_evidence and auto-evidence are this zone; a time ending in Z is UTC, 8 hours behind); " if c.get('now') else ''
-def build_prompt(c):
+# 0.6.30: mirrors buildAsk in register.ts. A case with "asks" {current, answered} renders the 0.6.30 ask (current asks, earlier ones labelled
+# already answered); layout "0629" renders "ask_0629" (what 0.6.29 sent: the stale turn-opening ask) instead. Other cases are the same in both layouts.
+NO_NEW_ASK='(no new message from J since the last final reply; nothing here is unanswered under rule (d))'
+EARLIER_ASKS='Earlier J messages, already answered by an earlier final reply (context only; never judge (d) on them)'
+def build_ask(cur,done,fallback=''):
+    c=[t.strip() for t in cur if t.strip()]; d=[t.strip() for t in done if t.strip() and t.strip() not in c]
+    head='\n'.join(c) if c else ('' if d else fallback.strip())
+    shown=head if head else (NO_NEW_ASK if d else '')
+    return shown if not d else shown+'\n['+EARLIER_ASKS+': '+' | '.join('"'+re.sub(r'\s+',' ',t)[:300]+'"' for t in d)+']'
+LAYOUT=os.environ.get('JUDGE_LAYOUT','0630')
+def case_ask(c,layout):
+    if layout=='0629' and 'ask_0629' in c: return c['ask_0629']
+    if layout!='0629' and 'asks' in c: return build_ask(c['asks'].get('current',[]),c['asks'].get('answered',[]))
+    return c['ask']
+def build_prompt(c,layout=None):
+    layout=layout or LAYOUT
     he=c.get('hook_evidence') or '(none)'
     tools='no' if he.strip() in ('(none)','') else 'yes'
     acted='yes' if c.get('acted') else 'no'
-    return (f"User's message this turn (captured by the hook):\n<ask>\n{esc((c['ask'] or '(not provided)')[:1500])}\n</ask>\n\n"
+    return (f"User's message this turn (captured by the hook):\n<ask>\n{esc((case_ask(c,layout) or '(not provided)')[:1500])}\n</ask>\n\n"
       f"Evidence summary written by the assistant:\n<evidence>\n{esc((c['evidence'] or '(none provided)')[:2000])}\n</evidence>\n\n"
       f"Tool results this turn, recorded by the hook (latest, truncated):\n<hook_evidence>\n{esc(he[-6000:])}\n</hook_evidence>\n\n"
       f"Hook facts: {now_part(c)}tools run this turn: {tools}; writes/actions this turn: {acted}.{esc(prefilter_note(c['draft'],bool(c.get('acted')) or bool(c.get('launch'))))}\n\n"
@@ -37,8 +52,8 @@ def parse(text):  # mirrors parseJudge in register.ts
     pr=[x.strip()[:300] for x in (j.get('problems') or []) if isinstance(x,str) and x.strip()][:3]
     if j['ok'] is False and not pr: return None
     return {'ok':j['ok'],'problems':[] if j['ok'] else pr}
-def call(rules,c,rep):
-    prompt=build_prompt(c)
+def call(rules,c,rep,layout=None):
+    prompt=build_prompt(c,layout)
     key=hashlib.sha256((rules+'\0'+prompt+'\0'+MODEL+'\0'+str(rep)).encode()).hexdigest()
     cp=os.path.join(HERE,'cache',key+'.json')
     if os.path.exists(cp): r=json.load(open(cp)); r['cached']=True; return r
@@ -54,11 +69,11 @@ def call(rules,c,rep):
     if v is not None: os.makedirs(os.path.dirname(cp),exist_ok=True); json.dump(r,open(cp,'w'))   # only cache parsed answers (0.6.29: the cache dir does not ship)
     r['cached']=False; return r
 def tags(v): return [m.group(1).lower() for p in v['problems'] for m in [re.match(r'^\s*\(?([a-f])\)',p,re.I)] if m]
-def run(rules_file,reps,tag=''):
+def run(rules_file,reps,tag='',layout=None):
     rules=open(rules_file).read().strip()
     cases=[json.load(open(f)) for f in sorted(glob.glob(os.path.join(HERE,'cases','*.json')))]
     jobs=[(c,i) for c in cases for i in range(reps)]
-    with ThreadPoolExecutor(6) as ex: res=list(ex.map(lambda j:call(rules,*j),jobs))
+    with ThreadPoolExecutor(6) as ex: res=list(ex.map(lambda j:call(rules,*j,layout),jobs))
     S=dict(fp=0,nb=0,catch=0,nbad=0,tagok=0,ntag=0,ms=[],err=0,fresh=0); miss=[]
     for (c,i),r in zip(jobs,res):
         v=r['verdict']

@@ -1572,6 +1572,33 @@ export const STYLE_PROBLEM = /\b(?:words? per (?:point|line|bullet)|\d+\s+words\
 // 0.6.25: once a reply to this prompt was delivered (a Stop-hook continuation keeps the prompt), the ask carries that fact, so (d) is not re-raised for it.
 export const ANSWERED_NOTE = '[A reply to this message was already delivered this turn (see "Already sent to J this turn"); judge (d) only on what the user still lacks.]'
 export const askNote = (ask: string, delivered: boolean): string => delivered ? `${ask}\n${ANSWERED_NOTE}` : ask
+// 0.6.30 (J 13 Nov 12:38, cross-turn bleed): rule (d) is judged only on J's messages since the last final reply (pend). A final reply moves
+// them to done (last 3), shown to the judge as context labelled already answered; the hook's ask overrides the model's `ask` argument, which
+// carried a stale question into Stop re-checks. A Stop re-check of a reply judges the asks that were pending when that reply reached J.
+export type AskState = { pend: string[]; done: string[] }
+export const ASK_PEND_MAX = 5
+export const ASK_DONE_MAX = 3
+export const askPush = (s: AskState, t: string): void => {
+  const x = t.trim()
+  if (x === '' || s.pend[s.pend.length - 1] === x) return
+  s.pend.push(x)
+  if (s.pend.length > ASK_PEND_MAX) s.pend.shift()
+}
+export const askAnswered = (s: AskState): string[] => {
+  const was = s.pend
+  s.done = [...s.done.filter(t => !was.includes(t)), ...was].slice(-ASK_DONE_MAX)
+  s.pend = []
+  return was
+}
+export const NO_NEW_ASK = '(no new message from J since the last final reply; nothing here is unanswered under rule (d))'
+export const EARLIER_ASKS = 'Earlier J messages, already answered by an earlier final reply (context only; never judge (d) on them)'
+export const buildAsk = (cur: string[], done: string[], fallback = ''): { cur: string; ask: string } => {
+  const c = cur.map(t => t.trim()).filter(t => t !== '')
+  const d = done.map(t => t.trim()).filter(t => t !== '' && !c.includes(t))
+  const head = c.length > 0 ? c.join('\n') : d.length > 0 ? '' : fallback.trim()
+  const shown = head !== '' ? head : d.length > 0 ? NO_NEW_ASK : ''
+  return { cur: head, ask: d.length === 0 ? shown : `${shown}\n[${EARLIER_ASKS}: ${d.map(t => `"${t.replace(/\s+/g, ' ').slice(0, 300)}"`).join(' | ')}]` }
+}
 export const MISSING_LINE = /\b(?:missing|absent|no|lacks?|without)\s+(?:a\s+|an\s+|the\s+)?\*{0,2}(?:leap|efficiency|next|checked|sleep)\b[^.\n]{0,15}\b(?:line|footer)s?\b|\b(?:leap|efficiency|next|checked|sleep)\*{0,2}\s+(?:line|footer)s?\b[^.\n]{0,50}\b(?:missing|absent|omitted)\b/i
 export type JudgeResult = { status: 'ok' | 'fail' | 'unavailable'; problems: string[]; ms: number }
 // 0.6.17: token usage of one judge call (names tolerated in camelCase or snake_case); cache = cache read + cache creation.
@@ -1770,9 +1797,9 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.29'
+export const PLUGIN_VERSION = '0.6.30'
 // 0.6.29 version row: this version's CHANGELOG line (tools/build-zip.sh fails unless CHANGELOG.md has "- <PLUGIN_VERSION>: <CHANGELOG_LINE>").
-export const CHANGELOG_LINE = 'Stop re-check repeat loop fixed: short no-claim texts exempt, no second re-check in a chain after a PASS or sent correction, the app no-output nudge is not a J turn, footer-only re-check fails logged not sent to J; Scoreboard fixes row written on the first deep turn of a new version; eval cache left out of the zip.'
+export const CHANGELOG_LINE = 'judge rule (d) cross-turn bleed fixed: the judge ask is the J messages since the last final reply (a Stop re-check judges the asks its reply answered); earlier asks show only as context labelled already answered; a stale ask argument from the model no longer overrides; judge-evals gain prompt layouts (gate --layouts 0629,0630) and 4 cases.'
 export const FIX_CATEGORY = 'unchecked reply'
 export const VERSION_ROW_KEY = 'fixesRowVersion' // the last PLUGIN_VERSION whose fixes row was queued
 export const versionRow = (date: string, time: string): { id: string; collection: string; data: Record<string, unknown> } => ({ id: `f-auto-dg${PLUGIN_VERSION.replace(/\./g, '')}`, collection: 'fixes', data: { category: FIX_CATEGORY, date, kind: 'hook', status: 'landed', title: `dispatch-guard ${PLUGIN_VERSION} (auto)`, detail: `dispatch-guard ${PLUGIN_VERSION} first deep turn ${date} ${time} SGT: ${CHANGELOG_LINE}`, plugin_version: PLUGIN_VERSION, auto: true } })
@@ -2020,6 +2047,21 @@ export const register: Register = on => {
   let turnActs: string[] = [] // 0.6.22/0.6.24: rolling last 30 non-read-only tool calls across turns (this chat): SGT time + name + input + ok/error + result start
   let turnSends: string[] = [] // ... this turn's SendMessage texts and memory write strings
   let sentText: string[] = [] // SendUserMessage texts this main turn (J-facing too)
+  const asks: AskState = { pend: [], done: [] } // 0.6.30: J's messages since the last final reply, and the last answered ones
+  const askFor = new Map<string, string[]>() // 0.6.30: reply hash -> the asks pending when that reply reached J (a Stop re-check judges these)
+  const replyDelivered = (t: string): void => {
+    const h = replyHash(t)
+    const was = askAnswered(asks)
+    if (!askFor.has(h) && was.length > 0) { askFor.set(h, was); if (askFor.size > 10) askFor.delete(askFor.keys().next().value as string) }
+  }
+  // the judge's ask for one draft: the asks its reply answers (re-check), else the pending mid-turn burst, else the pending asks; the model's ask only with no hook state
+  const judgeAsk = (text: string, mc: number | undefined, given: string): { cur: string; ask: string } => {
+    const snap = askFor.get(replyHash(text))
+    const mq = midQ.map(m => m.text.trim()).filter(t => asks.pend.includes(t)) // a queued message a delivered final reply already answered is not current
+    const cur = snap ?? (mc !== undefined && mq.length > 0 ? mq : asks.pend)
+    const none = snap === undefined && asks.pend.length + asks.done.length === 0 && mc === undefined
+    return buildAsk(cur, asks.done, none ? given : '')
+  }
   let delivered: string[] = [] // 0.6.25: final texts already delivered this prompt (a Stop-hook continuation keeps the prompt): the judge must not ask for them again
   // 0.6.8 per session id: whether artifacts were listed / reuse-first fired.
   const listedBy = new Set<string>()
@@ -2126,6 +2168,7 @@ export const register: Register = on => {
       // 0.6.20: queue it; the block (tool.call) holds every other tool until a SendUserMessage answers the queue.
       const at = await nowMs($)
       midQ.push({ text: jText(e.text), at, seq: ++midSeq, gap: lastJAt > 0 ? at - lastJAt : Infinity })
+      askPush(asks, jText(e.text)) // 0.6.30
       lastJAt = at
       if (midQ.length > 50) midQ = midQ.slice(-50)
       let list: unknown
@@ -2194,6 +2237,7 @@ export const register: Register = on => {
   // of a text is blocked once with STOP_RECHECK: the model checks the text J already has and sends only a correction, or nothing.
   on('classic.Stop', async ($, e, next) => {
     const last = String((e as Record<string, unknown>).last_assistant_message ?? '')
+    if (last.trim() !== '') replyDelivered(last) // 0.6.30: this text reached J; the asks pending now are answered by it
     if (last.trim() !== '' && finalPassed.has(replyHash(last))) return {}
     if (stopChainDone) return {} // 0.6.29: the re-check already ran in this chain; a forced closing line is never re-blocked
     if (last.trim() !== '' && jTurn && sendOk && !stopShort(last) && (await readMode($, mode)) === 'deep') {
@@ -2266,6 +2310,7 @@ export const register: Register = on => {
       fromGuard = submitted || e.text.trimStart().startsWith(GUARD_TAG)
       submitted = false
       jTurn = !fromGuard && isJ(e.text)
+      if (jTurn) askPush(asks, asked) // 0.6.30
       styleOwedNow = jTurn && styleOwed // the line carried in with this prompt: this turn owes the Correction:
       if (styleOwed && jTurn) styleOwed = false
       await close($, finished(e.text))
@@ -2312,7 +2357,8 @@ export const register: Register = on => {
       const atCap = await failCount($, denied, epoch) >= cap // at the cap the draft passes with a note: no judge call
       let sg: string[] = []
       const gateMode = num('deep-evidence', 'sourceGate') // 0 off, 1 log-only (DARK), 2 live
-      if (gateMode > 0 && !skipJudge(text, f.asked || String(x.ask ?? ''))) { // the short-reply exemption runs first
+      const ja = judgeAsk(text, mc, String(x.ask ?? '')) // 0.6.30
+      if (gateMode > 0 && !skipJudge(text, ja.cur)) { // the short-reply exemption runs first
         sg = sourceGate(text, String(x.evidence ?? ''))
         if (sg.length > 0 && DARK.has(SOURCE_GATE_ID) && gateMode < 2) { // dark: logged as a would-be hit, never denying
           await Promise.resolve().then(async () => { const log = await $.store.get(DENY_LOG_KEY); await $.store.set(DENY_LOG_KEY, [...(Array.isArray(log) ? log : []), { time: sgtIso(await nowMs($)), session: await $.session.id(), n: 0, dark: true, checks: [SOURCE_GATE_ID] }].slice(-500)) }).catch(() => undefined)
@@ -2330,7 +2376,7 @@ export const register: Register = on => {
 
       // 0.6.22: cheap rule checks run first; a draft that already fails one comes back at once, without the slower judge call.
       const ruleFirst = !atCap && deepProblems(text, f).some(p => !logOnly(p.id) && !DEEP_DARK.has(p.id))
-      const jr = pre.length > 0 || ruleFirst || skipJudge(text, f.asked || String(x.ask ?? '')) ? undefined : await judgeReply($, text, askNote(f.asked || String(x.ask ?? '').trim(), mc === undefined && delivered.length > 0), sentEvidence(String(x.evidence ?? '')), turnResults, f)
+      const jr = pre.length > 0 || ruleFirst || skipJudge(text, ja.cur) ? undefined : await judgeReply($, text, ja.ask, sentEvidence(String(x.evidence ?? '')), turnResults, f)
       const g = await deepGate($, text, f, denied, epoch, jr === undefined || jr.status === 'unavailable' ? undefined : { problems: jr.problems.map(t => ({ id: 'judge', text: `judge: ${t}` })) }, atCap && jr === undefined, pre, mc)
       denied = g.denied
       const recheck = stopBlocked.has(replyHash(text))
@@ -2428,7 +2474,8 @@ export const register: Register = on => {
           const sf = facts(), sAsk = mc === undefined ? sf.asked : midQ.map(m => m.text).join('\n')
           const sCap = await failCount($, denied, epoch) >= (mc === undefined ? denyCap() : Math.min(mc, denyCap()))
           const sRule = deepProblems(said, sf).some(p => !DARK.has(p.id) && !DEEP_DARK.has(p.id))
-          const sj = SEND_JUDGE && !sCap && !sRule && !skipJudge(said, sAsk) ? await judgeReply($, said, askNote(sAsk, mc === undefined && delivered.length > 0), sentEvidence(''), turnResults, { ...sf, asked: sAsk }) : undefined
+          const sja = judgeAsk(said, mc, '') // 0.6.30
+          const sj = SEND_JUDGE && !sCap && !sRule && !skipJudge(said, sja.cur) ? await judgeReply($, said, sja.ask, sentEvidence(''), turnResults, { ...sf, asked: sAsk }) : undefined
           // judge problems go in as `pre`, not `judged`: the narrow checks stay live on this path (never loosened by the judge's answer)
           const g = await deepGate($, said, sf, denied, epoch, undefined, false, sj === undefined || sj.status === 'unavailable' ? [] : sj.problems.map(t => ({ id: 'judge', text: `judge: ${t}` })), mc)
           denied = g.denied
@@ -2580,7 +2627,7 @@ export const register: Register = on => {
       return ran
     }
     inTurn = false
-    if (e.reason === 'answer' && String(e.answer ?? '').trim() !== '') { delivered.push(String(e.answer).slice(0, 3000)); if (delivered.length > 5) delivered.shift() }
+    if (e.reason === 'answer' && String(e.answer ?? '').trim() !== '') { delivered.push(String(e.answer).slice(0, 3000)); if (delivered.length > 5) delivered.shift(); replyDelivered(String(e.answer)) }
     midPending = false
     if (e.reason !== 'answer') { // 0.6.10: an aborted/limited turn still ends the previous turn's window
       const refired = new Set(firedTurn)

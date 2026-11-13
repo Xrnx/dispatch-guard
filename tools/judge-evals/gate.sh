@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# usage: gate.sh <current-rules> <candidate-rules> [--reps N]. Exit 0 only if candidate FP <= current FP and catch >= current catch.
+# usage: gate.sh <current-rules> <candidate-rules> [--reps N] [--layouts CUR,CAND]. Exit 0 only if candidate FP <= current FP and catch >= current catch.
+# --layouts (0.6.30) gates a prompt-layout change with the same rules, e.g. gate.sh rules/current.txt rules/current.txt --reps 4 --layouts 0629,0630
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 cur=${1:?usage: gate.sh <current> <candidate> [--reps N]}; cand=${2:?}; shift 2
-reps=2; [ "${1:-}" = "--reps" ] && reps=${2:?}
-python3 -I - "$here" "$cur" "$cand" "$reps" <<'PY'
+reps=2; [ "${1:-}" = "--reps" ] && { reps=${2:?}; shift 2; }
+layouts=0630,0630; [ "${1:-}" = "--layouts" ] && layouts=${2:?}
+python3 -I - "$here" "$cur" "$cand" "$reps" "$layouts" <<'PY'
 import sys,importlib.util
-here,cur,cand,reps=sys.argv[1:5]
+here,cur,cand,reps,lay=sys.argv[1:6]; la,lb=lay.split(',')
 spec=importlib.util.spec_from_file_location('jr',here+'/judge_run.py'); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-a=m.run(cur,int(reps)); b=m.run(cand,int(reps))
+a=m.run(cur,int(reps),layout=la); b=m.run(cand,int(reps),layout=lb)
 print(f"{'metric':<22}{'current':>12}{'candidate':>12}")
 for k,l in (('fp','FP rate (lower)'),('catch','catch (higher)'),('tag','tag accuracy')):
     print(f"{l:<22}{a[k]*100:>11.1f}%{b[k]*100:>11.1f}%")

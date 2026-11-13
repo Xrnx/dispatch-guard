@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { CARD } from './orchestrator-card'
+import { askPush, askAnswered, buildAsk, NO_NEW_ASK, EARLIER_ASKS, ASK_DONE_MAX, type AskState } from './register'
 import { validatePack, bundledPackJson, BUNDLED_VERSION, mergePack, bundledRules } from './rulepack'
 import { closureMisses, evidenceFirstHit, evidenceCall, realChange, deepCategory, jRow, corrRow, prefilterLines, repeatedLines } from './register'
 import { MISSING_LINE, sessionBlock, SESSION_INDEX_KEY, KEEP_SESSIONS, problemLabel, SET_RULES_TOOL, RULES_KEY, deepLine, setRules, cleanProblem, deepRow, tokensOf, JUDGE_TOKENS_KEY, judgeRules, skipJudge, denyCap, modeCommand, deepProblems, missingEfficiency, deepMissingLeap, replyHash, CHECK_TOOL, MODE_KEY, DENY_LOG_KEY, CAUGHT_KEY, JUDGE_KEY, JUDGE_RULES, parseJudge, DEEP_LINE, DEEP_DARK, CHECK_SPEC, stubOutput, undefinedLabels, questionOnly, redrafts, missingLeap, uncomputed, numbersIn, nonPreventions, startsWork, answersFirst, scopePhrases, asksJ, buriedAsks, promises, parkedFix, foregroundWait, offers, RELAY_AT, longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, jText, reasks, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL, clockStamp, danglingRefs, isJ, knowableAsks, inputAsk, workMade, draftGap, missUnlanded, fixEvidence, settleRow, absoluteClaims, openQuestions, PLUGIN_VERSION, sourceGate, efficiencyFix, STATS_KEY, statsRow, DARK_SAMPLES_CAP, STOP_RECHECK, SEND_JUDGE, SEND_ROUTE, ROUTE_LINE, statsJudge, STYLE_PROBLEM, inputDigest, keywordList, stateClaim, stopShort, footerOnly, NO_OUTPUT_NUDGE, versionRow, VERSION_ROW_KEY, CHANGELOG_LINE } from './register'
@@ -3017,7 +3018,7 @@ test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft pas
   expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
   expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 1, judge_ok: 1, judge_unavailable: 0, tokens_in: 100, tokens_out: 20, tokens_cache: 50 })
   expect(Object.values(d.fail_checks).reduce((a: number, b: any) => a + b, 0)).toBeGreaterThanOrEqual(2) // 0.6.22: the two failed BADC rounds are counted by check id
-  expect(PLUGIN_VERSION).toBe('0.6.29')
+  expect(PLUGIN_VERSION).toBe('0.6.30')
 })
 test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
   const { mem } = deepEngine(on, true)
@@ -4018,7 +4019,8 @@ test('0.6.25 FP-3 a final text already delivered this prompt reaches the judge a
   // a Stop-hook continuation: the same prompt goes on, no prompt.submit / turn.start (firing order inferred, see JUDGE-FP.md)
   await $.tool.call(chk(CLEAN, { evidence: 'EV' }))
   expect(String(judge.calls[judge.calls.length - 1].prompt)).toContain('Already sent to J this turn: Not quite. Two items are still open.')
-  expect(String(judge.calls[judge.calls.length - 1].prompt)).toContain('A reply to this message was already delivered this turn')
+  // 0.6.30: the delivered reply answered the prompt: no current ask is left, and the old one shows only as context, labelled already answered
+  expect(String(judge.calls[judge.calls.length - 1].prompt)).toContain(`<ask>\n${NO_NEW_ASK}\n[${EARLIER_ASKS}:`)
   await $.prompt.submit({ text: 'next question' } as any)
   await $.turn.start(turn('t3'))
   await $.tool.call(chk(`${CLEAN} Again.`, { evidence: 'EV2' }))
@@ -4258,8 +4260,63 @@ test('0.6.29 fix d: the first deep J turn on a new version queues one Scoreboard
   await $.turn.complete(end('d2', 'Noted.'))
   const rows = ((mem.corrLog as any[]) ?? []).filter(r => r.collection === 'fixes')
   expect(rows.length).toBe(1)
-  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0629', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.29' } })
+  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0630', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.30' } })
   expect(rows[0].data.detail).toContain(CHANGELOG_LINE)
-  expect(mem[VERSION_ROW_KEY]).toBe('0.6.29')
-  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.29 (auto)')
+  expect(mem[VERSION_ROW_KEY]).toBe('0.6.30')
+  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.30 (auto)')
+})
+
+// 0.6.30 cross-turn bleed (live 13 Nov 12:37-12:39 SGT): rule (d) cited "Are you done with all fixes?" (12:35, answered) against later asks.
+const askOf = (j: any): string => (/<ask>\n([\s\S]*?)\n<\/ask>/.exec(String(j.calls[j.calls.length - 1].prompt)) ?? ['', ''])[1]
+test('0.6.30 ask state: pending asks move to done on a final reply; done keeps the last 3; repeats are not doubled', () => {
+  const s: AskState = { pend: [], done: [] }
+  askPush(s, 'Are you done with all fixes?'); askPush(s, 'Are you done with all fixes?'); askPush(s, '  ')
+  expect(s.pend).toEqual(['Are you done with all fixes?'])
+  expect(askAnswered(s)).toEqual(['Are you done with all fixes?'])
+  expect(s).toEqual({ pend: [], done: ['Are you done with all fixes?'] })
+  for (const t of ['a?', 'b?', 'c?']) { askPush(s, t); askAnswered(s) }
+  expect(s.done).toEqual(['a?', 'b?', 'c?'])
+  expect(s.done.length).toBe(ASK_DONE_MAX)
+})
+test('0.6.30 buildAsk: current asks lead, earlier ones are labelled already answered; none current -> NO_NEW_ASK; no state -> the given ask', () => {
+  const a = buildAsk(['is it too big in filesize now?'], ['Uploaded 0628\n\nAre you done with all fixes?'])
+  expect(a.cur).toBe('is it too big in filesize now?')
+  expect(a.ask).toBe(`is it too big in filesize now?\n[${EARLIER_ASKS}: "Uploaded 0628 Are you done with all fixes?"]`)
+  const b = buildAsk([], ['Are you done with all fixes?'], 'Are you done with all fixes?')
+  expect(b.cur).toBe('') // a stale model-given ask never becomes current while the hook has state
+  expect(b.ask.startsWith(NO_NEW_ASK)).toBe(true)
+  expect(buildAsk([], [], 'given ask')).toEqual({ cur: 'given ask', ask: 'given ask' })
+  expect(buildAsk(['same?'], ['same?']).ask).toBe('same?') // a current ask is never also listed as answered
+})
+test('0.6.30 replay: a later J message is judged as the ask, not the answered opening one, even when the model passes the stale ask', async ($, on) => {
+  const { judge } = deepEngine(on, false)
+  envBox(on, { CLAUDE_CODE_SESSION_ATTENDED: '1' })
+  await jTurnStart($, 'Uploaded 0628\n\nAre you done with all fixes?', 'r1')
+  await $.turn.complete(end('r1', 'No. Two causes are still open.'))
+  await $.prompt.submit(jMid('When do you think the outage will be restored', 'r1')) // J's next message lands in the same chain
+  await $.tool.call(chk(LONGW, { ask: 'Uploaded 0628 / Are you done with all fixes?', evidence: 'EV' }))
+  const a = askOf(judge)
+  expect(a.startsWith('When do you think the outage will be restored')).toBe(true)
+  expect(a).toContain(`[${EARLIER_ASKS}: "Uploaded 0628 Are you done with all fixes?"]`)
+  // the answer reaches J; a filler after the app nudge has no current ask, and a short one never calls the judge for the old yes/no question
+  await $.turn.complete(end('r1', 'Later today, Singapore time (estimate).'))
+  const n = judge.calls.length
+  await $.tool.call(chk('Nothing to add.', { ask: 'Are you done with all fixes?' }))
+  expect(judge.calls.length).toBe(n)
+  await $.tool.call(chk(LONGW + ' more', { ask: 'Are you done with all fixes?', evidence: 'EV' }))
+  expect(askOf(judge).startsWith(NO_NEW_ASK)).toBe(true)
+})
+test('0.6.30 Stop re-check judges the asks its reply answered; a J message sent during the re-check is the next draft\'s ask', async ($, on) => {
+  const { judge } = deepEngine(on, false)
+  envBox(on, { CLAUDE_CODE_SESSION_ATTENDED: '1' })
+  await jTurnStart($, 'how should I plan my workday', 's1')
+  await $.tool.call({ tool: 'Read', file_path: '/x' } as any)
+  expect(((await ($ as any).classic.Stop({ stop_hook_active: false, last_assistant_message: LONGW })) as any).block).toBeDefined()
+  await $.prompt.submit(jMid('is it too big in filesize now?', 's1'))
+  await $.tool.call(chk(LONGW, { ask: 'stale', evidence: 'EV' }))
+  expect(askOf(judge).startsWith('how should I plan my workday')).toBe(true) // the re-checked reply answers the workday ask
+  expect(askOf(judge)).not.toContain('filesize')
+  await $.tool.call(chk(`${LONGW} next`, { ask: 'stale', evidence: 'EV' }))
+  expect(askOf(judge).startsWith('is it too big in filesize now?')).toBe(true)
+  expect(askOf(judge)).toContain('"how should I plan my workday"')
 })
