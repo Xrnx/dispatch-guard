@@ -33,6 +33,7 @@ export const RANGES: Record<string, Record<string, [number, number]>> = {
   'deep-evidence': { sessionChars: [0, 40000], judgeChars: [0, 20000], factsChars: [0, 2000], sourceGate: [0, 2] }, // 0.6.18: rolling per-session evidence store size; share shown to the judge
   'evidence-first': { enforce: [0, 2] }, // 0.6.25: 0 off, 1 log-only, 2 live (default)
   'closure-line': { enforce: [0, 2] }, // 0.6.25: 0 off, 1 log-only, 2 live (default)
+  'claim-ahead': { enforce: [0, 2] }, // 0.6.28: 0 off, 1 log-only, 2 live (default)
 }
 
 // 0.6.17: the judge's rules, overridable from a pack (deep-judge.messages.rules, JUDGE_RULES_MIN-JUDGE_RULES_MAX chars).
@@ -328,6 +329,25 @@ export const BUNDLED: Record<string, CheckDef> = {
       whereNoun: /\b(?:the|this|my) [\w-]+ (?:file|card|skill|pack|list|memory)\b/i,
     },
     messages: { line: 'Close each fix line: end it "done in <where>" (only if changed this turn) or "needs J". Later/queued/handoff/next build only with a job launched this turn; hindsight needs the change made now.' },
+  },
+  // 0.6.28 claim-ahead (J, 13 Nov; DRAFT-REVIEW "claim ahead of work"): a Correction/Prevention/Efficiency/Status/Next line that says work is done
+  // ("done in <place>", built, saved) or started (running, launched, sent) passes only when this turn's tool log has a matching action: a write naming the
+  // place (Edit/Write/memory write/ArtifactData write/Artifact publish/file-writing Bash) for `place`, any write for `write`, a launch or send for `launch`/`send`.
+  // Text match only, no judge. `exempt` (clause) and `before` (the words just before the verb) keep requested / needs J / not built / would / reported speech allowed.
+  'claim-ahead': {
+    numbers: { enforce: 2 },
+    patterns: {
+      label: /^[ \t>]*(?:[-*+•][ \t]+)?(?:\*\*|__)?[ \t]*(?:Correction|Prevention|Efficiency|Status|Next)\b(?=[^\n]{0,80}:)(.*)$/i,
+      place: /\b(?:done|saved|built|written)\s+(?:in|to|into|at|under)\s+(?!(?:this|the) (?:reply|message|answer|chat|thread|turn)\b|chat\b|(?:about|around|under|over|less|more|a few|an?|~|\d)\s*(?:\d|min|minutes?|hours?|h\b|secs?|seconds?|days?|than)|~?\d)/i,
+      write: /\b(?:built|saved|rebuilt)\b(?!-in\b)/i,
+      launch: /\b(?:running|launched|relaunched|dispatched)\b/i,
+      send: /\bsent\b/i,
+      fresh: /\b(?:now|just|this turn|this round)\b/i, // a Correction narrates the past miss: its write/launch/send words claim this turn's work only with one of these
+      exempt: /\b(?:(?:started|launched|dispatched|since|from)\s+(?:at\s+)?\d{1,2}:\d{2}|(?:last|earlier|previous|prior) (?:turn|reply|round|night)|requested|needs? (?:J|you|your)|\(needs you\)|not(?: yet)? (?:\w+ )?(?:built|saved|done|sent|launched|running|started|made)|not yet|none yet|irreversible|J-only|your (?:call|decision|ok)|until|unless|once)\b/i,
+      before: /\b(?:if|whether|when|once|until|unless|before|after)\b(?:[^\w(),;:]+\w+){0,4}[^\w(),;:]+$|(?:\b(?:not|never|no|nothing|none|neither|nor|with|without|confirm|check|verify|ensure|had|will|would|could|should|might|may|must|be|being|gets?|getting|needs?|asked|awaiting|pending|planned|proposed|due|yet|said|says|called|claimed|reported|stated|wrote|told|marked|listed|you|J|he|she|they)\b|n['’]t|['’](?:ll|d))\W*(?:\w+\W+){0,2}$|\b(?:by|for|from|of|about|whenever|while|stop|start|still|already|earlier|previously|and not|a|an|the|my|its|their|our|his|her|whose)\W+$|\b(?:every|any|each|all|only)\W+(?:\w+\W+){0,2}$/i,
+      after: /^\W{0,3}(?:(?:at|on|since)\s+)?\d{1,2}:\d{2}\b|^\s*(?:(?:it|them|this|that)\s+)?back\b|^\s*(?:(?:this|the|my|a|that|its|first|earlier|previous|final)\s+){0,2}(?:draft|answer|reply|version)\b|^\s*(?:you|me|us|J|him|her|them|time|rounds?|tokens?|turns?|minutes?|hours?|steps?|a (?:round|turn|step|call)|total|tally|count|sum|log|list|low|out|costs?|text|state|earlier|previously|before|already|yesterday|last)\b|^\s*(?:\$|~)\s*\d|^\s*\d+(?:\.\d+)?\s*(?:%|x|k|s|min|minutes?|hours?|rounds?|turns?|calls?|tokens?|steps?|messages?)\b/i,
+    },
+    messages: { line: 'Claim ahead of work: done/built/saved/running/launched/sent with no matching write or launch this turn (running: nor a live job on record). Do it now, or say "requested", "needs J" or "not built".' },
   },
   // 0.6.17 deep-cap: failed checks per draft before PASS-with-note (0 = never fail a draft).
   'deep-cap': { numbers: { cap: 1 } },

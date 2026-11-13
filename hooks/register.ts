@@ -562,6 +562,18 @@ export const boardWrite = (e: Record<string, unknown>): boolean => {
   if (!ARTIFACT_DATA.test(String(e.tool)) || !['set', 'update', 'batch'].includes(String(e.action))) return false
   return String(e.url ?? '').includes(BOARD_URL)
 }
+// 0.6.28 claim-ahead: what a job-record call says about live jobs. A task-list read or a status-board read (get/list/query) sets it from its result;
+// a board write that marks a row live sets it; any other call leaves it (undefined). Live = a job or row whose status is running / in progress / active / building / queued.
+const BOARD_LIVE = /["']?status["']?\s*:\s*["']?(?:running|in[ _-]?progress|active|building|queued)\b/i
+const TASKS_LIVE = /(?:^|[\s·|:"'(])(?:running|in[ _-]?progress)\b/im
+export const liveJobsOf = (e: Record<string, unknown>, result: string): boolean | undefined => {
+  if (/(?:^|__)(?:TaskList|TaskGet)$/.test(String(e.tool))) return TASKS_LIVE.test(result)
+  if (!ARTIFACT_DATA.test(String(e.tool)) || !String(e.url ?? '').includes(BOARD_URL)) return undefined
+  const act = String(e.action ?? '')
+  if (['get', 'list', 'query'].includes(act)) return BOARD_LIVE.test(result)
+  if (['set', 'update', 'batch'].includes(act) && BOARD_LIVE.test(JSON.stringify([e.data, e.writes, e.batch]))) return true
+  return undefined
+}
 const NOTE_FINAL = /<status>\s*(completed|failed|killed|stopped|cancelled|error)\s*</i
 // idle-guard: removing the orchestrator ledger, or saying it is cleared / the queue is empty.
 const LEDGER_RM = /(^|[\s;&|(])rm\b[^;&|\n]*?(\s["']?\$\{?L\}?["']?(?=$|[\s;&|)])|(~|\$HOME)?\/?\.claude\/orchestrator\/)/
@@ -1237,12 +1249,19 @@ export const CHECK_TOOL = 'mcp__dispatch-guard__check_reply'
 export const SET_RULES_TOOL = 'mcp__dispatch-guard__set_rules'
 export const RULES_KEY = 'standingRules' // `standingRules:<session>` = the user's standing rules text, capped at RULES_MAX chars
 export const RULES_MAX = 12_000
+// 0.6.28: an unchecked SendUserMessage runs the AI judge too (send = check), so a reply routed through it is checked before J sees it.
+export const SEND_JUDGE = true
+// 0.6.28: route every reply through SendUserMessage (the deep line says so). Off until a harness A/B shows it does not cost quality or speed.
+export const SEND_ROUTE = false
+export const ROUTE_LINE = `Send every reply to J with SendUserMessage: it runs the same check before J sees it and holds a failing draft (check_reply first is optional and saves a round). After it goes out, end the turn with no text.`
+// 0.6.28: the Stop re-check (once per text): the reply reached J unchecked; check it now and send only a correction.
+export const STOP_RECHECK = `Deep mode: this reply reached J without a check_reply PASS. Call ${CHECK_TOOL} now with this exact reply as text. If it passes, end the turn with no text: J already has it. If it fails, send J only the correction (what was wrong, the fixed line) with SendUserMessage; never repeat the reply.`
 export const DEEP_LINE = `Deep mode: draft the reply, call ${CHECK_TOOL} with {text, ask, evidence} (ask = J's message this turn, verbatim; evidence = one line per claim: <claim> ← <source: tool + time, agent report + time, J's words, or inferred/estimate>) and fix every listed problem until it returns PASS <hash>, then write that exact text as your final reply: nothing before or after it. Write the draft only inside the check_reply call; no visible text before the final reply. A mid-turn message to J goes out with the SendUserMessage tool, only after check_reply passed that exact text. Rule checks require: **Efficiency:** and **Leap:** lines on substantive replies; Correction with Prevention and "Why you caught it:"; every figure and done-claim in evidence or labelled inferred/estimate/requested; no unchecked absolutes, open questions or offers.`
 export const replyHash = (t: string): string => { const n = String(t ?? '').replace(/\s+/g, ' ').trim(); return `${fnv8(n)}${n.length.toString(36)}` }
 export const modeSwitchLine = (m: ReplyMode): string => m === 'deep'
   ? 'Mode switched to deep: replies are checked before J sees them (a few seconds slower).'
   : 'Mode switched to light: replies go straight out; the turn-end check may add a Correction: afterwards.'
-export type DeepFacts = { asked: string; corpus: string; looked: boolean; anyTool: boolean; jTurn: boolean; acted: boolean; landed?: boolean; saved?: boolean; askTool?: boolean; wrote?: boolean; hadLeap?: boolean; hadEff?: boolean; launch?: boolean; changed?: boolean }
+export type DeepFacts = { asked: string; corpus: string; looked: boolean; anyTool: boolean; jTurn: boolean; acted: boolean; landed?: boolean; saved?: boolean; askTool?: boolean; wrote?: boolean; hadLeap?: boolean; hadEff?: boolean; launch?: boolean; changed?: boolean; acts?: Act[]; open?: boolean }
 // Deterministic pre-send checks on one message's text (the same checks the turn-end pass runs); returns the exact problems.
 export type Problem = { id: string; text: string; weak?: boolean }
 const EFF_LINE = /(?:^|\n)\W*Efficiency\b\W*:/i
@@ -1289,6 +1308,113 @@ export const closureMisses = (text: string, f: { changed?: boolean; launch?: boo
   }
   return out
 }
+// 0.6.28 claim-ahead: this turn's tool log as the deterministic claim check reads it. One entry per successful main-thread call:
+// `write` (Edit/Write/memory write/ArtifactData write/Artifact publish/skill proposal/scheduled-task update/file-writing Bash), `launch` (Agent, SendMessage,
+// send_later/create_trigger/fire_trigger, background Bash), `send` (SendMessage, SendUserMessage, other send/post tools), `report` (a finished agent's result).
+// `tgt` = the call's path/url/collection/doc id (Bash: the command); `hay` = tgt plus the written content, lower-cased.
+// `hay` of a plan/log write = its target only. `tag` = the words a "done in <place>" claim uses for the call's kind of place (memory, Scoreboard, agent brief, trigger...), plus a launch's result head (its id).
+export type Act = { kind: 'write' | 'launch' | 'send' | 'report'; tgt: string; hay: string; tag?: string }
+const ACT_TAGS: [RegExp, string][] = [
+  [/^(?:Agent|Task)$/, 'agent background builder brief instructions prompt'],
+  [/^SendMessage$/, 'agent builder brief instructions message'],
+  [/(?:^|__)(?:create_trigger|send_later|fire_trigger|update_trigger)$/, 'trigger scheduler scheduled task check chain continuation'],
+  [/(?:^|__)memory_\w+$/, 'memory'],
+  [/(?:^|__)ArtifactData$/, 'artifact database collection'],
+  [/(?:^|__)Artifact$/, 'artifact page'],
+  [/(?:^|__)set_rules$/, 'dispatch-guard pre-send check reply checker rules'],
+  [/(?:^|__)propose_skills$/, 'skill proposal'],
+  [/^(?:Edit|Write|NotebookEdit|MultiEdit)$/, 'file'],
+]
+export const actsOf = (e: Record<string, unknown>, result = ''): Act[] => {
+  const full = String(e.tool ?? ''), tool = full.replace(/^mcp__.*__/, ''), act = String(e.action ?? '') // an MCP-served Agent/Bash/SendMessage counts as the built-in one
+  const cut = (v: unknown): string => (typeof v === 'string' ? v : v === undefined || v === null ? '' : JSON.stringify(v)).slice(0, 3000)
+  const cmd = tool === 'Bash' ? String(e.command ?? '') : ''
+  const tgt = (cmd !== '' ? cmd : [e.file_path, e.notebook_path, e.path, e.url, e.collection, e.doc_id, e.trigger_id, e.to, e.name, e.subagent_type].filter(x => typeof x === 'string').join(' ')).toLowerCase()
+  const hay = `${tgt} ${[e.new_string, e.content, e.new_str, e.text, e.data, e.writes, e.edits, e.prompt, e.message, e.description, e.payload, e.batch, e.files].map(cut).join(' ')}`.toLowerCase()
+  const url = String(e.url ?? '')
+  const tag = [...ACT_TAGS.filter(([r]) => r.test(tool)).map(([, t]) => t), url.includes(SCOREBOARD_URL.split('/').pop() ?? '-') ? 'scoreboard corrections' : '', url.includes(BOARD_URL) ? 'status board' : '',
+    typeof e.description === 'string' ? e.description : ''].join(' ').toLowerCase()
+  // a plan or log write (handoff, open items, board row, Scoreboard row, rule-store load) is matched by its target and kind only: its text saying "done in X" never backs X
+  const mk = (kind: Act['kind']): Act => ({ kind, tgt, hay: kind === 'write' && !realChange(e) ? tgt : hay, tag: kind === 'launch' || kind === 'send' ? `${tag} ${result.slice(0, 500).toLowerCase()}` : tag })
+  if (AGENT_TOOLS.has(tool)) return [mk('launch'), ...(result.trim() === '' || /\b(?:launched|in the background|async)\b/i.test(result.slice(0, 300)) ? [] : [{ kind: 'report' as const, tgt: '', hay: result.slice(0, 6000).toLowerCase() }])] // a finished (foreground) agent's report backs what it did
+  if (tool === 'SendMessage') return [mk('launch'), mk('send')]
+  if (tool === 'SendUserMessage') return [mk('send')]
+  if (TRIGGER_TOOL.test(tool) || /(^|__)fire_trigger$/.test(tool)) return [mk('launch')]
+  if (tool === 'Bash') return [...(e.run_in_background === true ? [mk('launch')] : []), ...(BASH_CHANGE.test(cmd) ? [mk('write')] : [])]
+  if (/^(?:Edit|Write|NotebookEdit|MultiEdit)$/.test(tool) || MEMORY_WRITE.test(tool) || /(^|__)(?:memory_delete|propose_skills|update_trigger|set_rules)$/.test(tool)) return [mk('write')]
+  if (ARTIFACT_DATA.test(tool)) return ['set', 'update', 'str_replace', 'batch', 'delete'].includes(act) ? [mk('write')] : []
+  if (/(^|__)Artifact$/.test(tool)) return act === '' || act === 'publish' ? [mk('write')] : []
+  if (/Docs__(?:batch|update)$/.test(full)) return [mk('write')]
+  if (/^\w*(?:send|post|reply)\w*$/i.test(tool) && tool !== 'check_reply') return [mk('send')]
+  return []
+}
+// The words naming where a "done in <place>" claim landed: a path, file name or URL gives its last segment (matched against a write's target);
+// a descriptive place ("my agent-brief template") gives its content words (5-letter stems, matched against a write's target or content).
+const CLAIM_PATH = /`([^`\n]+)`|(https?:\/\/[^\s)]+)|((?:~|\.{1,2})?\/[\w.@-]+(?:\/[\w.@-]+)+)|\b([\w-]+\.(?:md|ts|tsx|js|mjs|json|py|sh|html|txt|csv|patch|zip|docx|xlsx|yaml|yml))\b/
+const CLAIM_STOP = /^(?:this|that|these|those|with|from|into|their|there|your|mine|file|files|line|lines|place|here|where|which|turn|reply|message|answer|today|same|every|each)$/
+export const placeKeys = (place: string): { path: boolean; keys: string[] } => {
+  const m = CLAIM_PATH.exec(place)
+  if (m !== null) {
+    const raw = String(m[1] ?? m[2] ?? m[3] ?? m[4]).replace(/(?::\d+(?:-\d+)?)?[.,;:)\]]*$/, '')
+    const seg = raw.split(/[/?#\s]/).filter(Boolean)
+    return { path: true, keys: [(seg.length > 0 ? seg[seg.length - 1] : raw).toLowerCase()] }
+  }
+  const words = (place.toLowerCase().match(/[a-z][a-z0-9-]{3,}/g) ?? []).flatMap(w => w.split('-')).filter(w => w.length >= 4 && !CLAIM_STOP.test(w))
+  return { path: false, keys: [...new Set(words.map(w => w.slice(0, 5)))] }
+}
+// 0.6.28 claim-ahead (deterministic, no judge): each Correction/Prevention/Efficiency/Status/Next line whose done-claim ("done in <place>", built, saved,
+// running, launched, sent) has no matching action in this turn's tool log. Returns [line snippet, why] per miss (one per line). Pattern keys: pack check `claim-ahead`.
+export const claimAhead = (text: string, f: { acts?: Act[]; launch?: boolean; open?: boolean }): [string, string][] => {
+  const p = (k: string): RegExp => rx('claim-ahead', k)
+  const g = (k: string): RegExp => { const r = p(k); return new RegExp(r.source, r.flags.includes('g') ? r.flags : `${r.flags}g`) }
+  const acts = f.acts ?? []
+  const any = (kinds: Act['kind'][], ok: (a: Act) => boolean = () => true): boolean => acts.some(a => kinds.includes(a.kind) && ok(a))
+  const out: [string, string][] = []
+  for (const line of proseLines(text)) {
+    const m = p('label').exec(line)
+    if (m === null) continue
+    const body = String(m[1] ?? '').replace(/"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’/g, ' ') // quoted words are reported speech, not a claim
+    if (/^[\s*_:]*none\b/i.test(body) || /\(needs you\)/i.test(body.split(':')[0])) continue // "Next (needs you):" waits on J
+    const snip = line.trim().slice(0, 80)
+    const corr = /^[\s>*_+•-]*correction\b/i.test(line) // a Correction narrates the past miss: only its place claims and "now"/"this turn" clauses claim this turn's work
+    let miss: string | undefined
+    for (const clause of body.split(/;\s+|(?<=[.!?])\s+(?=[A-Z(*_`'])|\s+[—–]\s+|\s+--\s+/)) {
+      if (miss !== undefined) break
+      if (p('exempt').test(clause)) continue
+      const live = (i: number, len: number): boolean => !p('before').test(clause.slice(0, i)) && !p('after').test(clause.slice(i + len))
+      const placeAt = new Set<number>()
+      for (const d of clause.matchAll(g('place'))) {
+        const vlen = (/^\w+/.exec(d[0]) ?? [''])[0].length
+        placeAt.add(d.index)
+        if (!live(d.index, vlen)) continue
+        const rest = clause.slice(d.index + d[0].length)
+        const place = (/^(?:`[^`\n]*`|[^,;()\n])*?(?=[,;()]|\.(?:\s|$)|\s+(?:and|but|so|with|for|—|-)\s|$)/.exec(rest) ?? [rest])[0].slice(0, 100)
+        const { path, keys } = placeKeys(place)
+        const where = (a: Act): string => path && a.kind === 'write' ? a.tgt : a.kind === 'launch' || a.kind === 'send' ? `${a.tgt} ${a.tag ?? ''}` : `${a.hay} ${a.tag ?? ''}`
+        const ok = keys.length === 0 ? any(['write', 'report', 'launch']) : any(['write', 'report', 'launch', 'send'], a => keys.some(k => where(a).includes(k)))
+        if (!ok) { miss = `"${d[0].trim()}${place.trim().slice(0, 40)}": no write or agent report this turn names ${keys.length === 0 ? 'any place' : `"${keys.join('/')}"`}`; break }
+      }
+      if (miss !== undefined) break
+      if (corr && !p('fresh').test(clause)) continue
+      for (const d of clause.matchAll(g('write'))) {
+        if (placeAt.has(d.index) || !live(d.index, d[0].length)) continue
+        if (!any(['write', 'report'])) { miss = `"${d[0]}": no write ran this turn`; break }
+      }
+      if (miss !== undefined) break
+      for (const d of clause.matchAll(g('launch'))) {
+        if (!live(d.index, d[0].length)) continue
+        if (f.launch !== true && !any(['launch']) && !(f.open === true && /^running$/i.test(d[0]))) { miss = `"${d[0]}": no agent, message or job launched this turn${/^running$/i.test(d[0]) ? ' and no live job on record' : ''}`; break } // "running": a job launched in an earlier turn and still open counts
+      }
+      if (miss !== undefined) break
+      for (const d of clause.matchAll(g('send'))) {
+        if (!live(d.index, d[0].length)) continue
+        if (f.launch !== true && !any(['launch', 'send'])) { miss = `"${d[0]}": nothing was sent this turn`; break }
+      }
+    }
+    if (miss !== undefined) out.push([snip, miss])
+  }
+  return out
+}
 // 0.6.25 stop-repeat: draft lines (3+ words, footers aside) whose words are mostly (>= 0.8 of the shorter line) in one line J already saw this turn.
 export const STOP_FEEDBACK = /(?:^|\n)\s*Stop hook feedback\b/
 const FOOTER_LINE = /^[\s>*_-]*(?:\*\*|__)?(?:Efficiency|Leap|Next|checked)\b[^:\n]{0,20}:/i
@@ -1316,7 +1442,7 @@ export const deepProblems = (text: string, f: DeepFacts): Problem[] => {
   const wd = weekdayMismatches(text, f.asked)
   if (wd.length > 0) add('stop-dates', `weekday/date mismatch: ${wd.slice(0, 3).join('; ')}`)
   if (correctionWithoutPrevention(text, f.asked)) add('prevention-line', 'Correction without a "Prevention:" line (change made, or "Prevention: none \u2014 why")')
-  else if (preventionWithoutWhy(text, f.asked)) add('prevention-line', 'Prevention/Correction without "Why you caught it:" (why J, not Claude, caught it)')
+  if (preventionWithoutWhy(text, f.asked)) add('prevention-line', 'Prevention/Correction without "Why you caught it:" (why J, not Claude, caught it)')
   if (f.anyTool || !f.jTurn) { const u = unsourcedFigures(text, f.corpus, f.asked); if (u.length > 0) add('stop-figures', `figures with no source in this turn: ${u.slice(0, 4).join(', ')}`) }
   const b = unsourcedBullets(text, f.asked)
   if (b >= 3) add('stop-sources', `${b} bullets with no source marker (add the source or tag unverified/inferred)`)
@@ -1326,7 +1452,9 @@ export const deepProblems = (text: string, f: DeepFacts): Problem[] => {
   const cl = num('closure-line', 'enforce') > 0 ? closureMisses(text, f) : []
   if (cl.length > 0) add('closure-line', `${msg('closure-line')} ${cl.slice(0, 3).map(([l, w]) => `"${l}" (${w})`).join('; ')}`) // 0.6.25: wins over efficiency-fix on the same line
   if (parkedFix(text, f.acted)) add('parked-fix', msg('parked-fix'))
-  else if (cl.length === 0 && efficiencyFix(text, f.acted || f.launch === true)) add('efficiency-fix', msg('parked-fix'))
+  else if (!cl.some(([l]) => /^\W*Efficiency\b/i.test(l)) && efficiencyFix(text, f.acted || f.launch === true)) add('efficiency-fix', msg('parked-fix')) // 0.6.28: closure-line wins on the Efficiency line only; a closure miss elsewhere no longer hides it for a round
+  const ca = num('claim-ahead', 'enforce') > 0 ? claimAhead(text, f) : []
+  if (ca.length > 0) add('claim-ahead', `${msg('claim-ahead')} ${ca.slice(0, 3).map(([l, w]) => `"${l}" (${w})`).join('; ')}`)
   if (missUnlanded(text, f.landed === true || f.acted)) add('miss-landing', msg('miss-landing'))
   if (unsavedPromise(text, f.saved === true, f.asked)) add('unsaved-promise', msg('unsaved-promise'))
   if (f.wrote !== true && promises(text)) add('promise-proof', msg('promise-proof'))
@@ -1394,7 +1522,7 @@ export const SET_SPEC = {
   isDeferred: false,
 }
 // 0.6.17: the deep line as injected: DEEP_LINE + the short-reply exemption (threshold from the pack) + the set_rules instruction.
-export const deepLine = (): string => `${DEEP_LINE} Fill the evidence field first, then draft only claims it backs; a claim about current state (live, synced, running, done) needs a tool result from this turn, so run that check before drafting; label estimates, plans, requests, causes and a fix's intended effect as such (estimate / inferred / intended), never as fact. Replies under ${num('deep-judge', 'minWords')} words with no Correction/Prevention/done-claim word (fixed, saved, verified, passed, done, sent, live, yes ...) and not answering a yes/no question may skip check_reply and go out directly as the final text. Once per session, before your first check_reply, call ${SET_RULES_TOOL} with {text} = the user's saved preferences text verbatim.`
+export const deepLine = (): string => `${DEEP_LINE} Fill the evidence field first, then draft only claims it backs; a claim about current state (live, synced, running, done) needs a tool result from this turn, so run that check before drafting; label estimates, plans, requests, causes and a fix's intended effect as such (estimate / inferred / intended), never as fact. Replies under ${num('deep-judge', 'minWords')} words with no Correction/Prevention/done-claim word (fixed, saved, verified, passed, done, sent, live, yes ...) and not answering a yes/no question may skip check_reply and go out directly as the final text. Once per session, before your first check_reply, call ${SET_RULES_TOOL} with {text} = the user's saved preferences text verbatim.${SEND_ROUTE ? ` ${ROUTE_LINE}` : ''}`
 export async function hasCheckTool($: EngineInterface): Promise<boolean> {
   let list: unknown
   try { list = await $.tool.list() } catch { return true }
@@ -1404,6 +1532,12 @@ export async function hasCheckTool($: EngineInterface): Promise<boolean> {
 }
 // 0.6.16 pre-send AI judge. When it answers, the narrow checks it covers generically drop from deny to log-only (dark) in deep mode; without an answer (fallback path, unavailable) they still deny.
 export const DEEP_DARK: ReadonlySet<string> = new Set(['open-question', 'unbacked-absolute', 'stop-dates'])
+// 0.6.28: DARK ids, plus claim-ahead while its pack switch is below 2 (log-only).
+export const logOnly = (id: string): boolean => DARK.has(id) || (id === 'claim-ahead' && num('claim-ahead', 'enforce') < 2)
+// 0.6.28: the checks that read labelled footer lines (Correction/Prevention/Why, Efficiency, Leap, Status, Next). A refusal that stops before the full rule pass
+// (evidence-first) still lists these, so one round names every footer problem.
+export const FOOTER_IDS: ReadonlySet<string> = new Set(['prevention-line', 'leap-line', 'efficiency-line', 'closure-line', 'efficiency-fix', 'parked-fix', 'claim-ahead'])
+export const EFF_NONE = /^[\s>*_-]*(?:\*\*|__)?Efficiency:(?:\*\*|__)?\s*none\b/im
 export const JUDGE_KEY = 'judgeLog' // rows {time, session, ms, status: ok|fail|unavailable, problems}, last 500
 export const JUDGE_MODEL = 'haiku'
 export const JUDGE_TIMEOUT_MS = 8000
@@ -1600,7 +1734,7 @@ export const problemLabel = (p: Problem): string => {
     const t = p.text.toLowerCase()
     return /contradict/.test(t) ? 'contradicted claim' : /not shown|unsupported|no evidence|unbacked|not backed|unverified/.test(t) ? 'unsupported claim' : /undone|not started|could do|offer|left/.test(t) ? 'undone work' : /not answer|unanswered|question/.test(t) ? 'unanswered question' : /footer|leap|efficiency|format/.test(t) ? 'footer/format' : 'other'
   }
-  return /^(?:unbacked-absolute|stop-figures|stop-sources|stop-writes|stop-dates|source-gate|evidence-first)$/.test(p.id) ? 'unsupported claim' : /^(?:open-question|offer-guard|parked-fix|efficiency-fix|miss-landing|unsaved-promise|promise-proof|closure-line)$/.test(p.id) ? 'undone work' : /^(?:prevention-line|leap-line|efficiency-none|answer-first|checked-line|dangling-ref)$/.test(p.id) ? 'footer/format' : 'other'
+  return /^(?:unbacked-absolute|stop-figures|stop-sources|stop-writes|stop-dates|source-gate|evidence-first)$/.test(p.id) ? 'unsupported claim' : /^(?:open-question|offer-guard|parked-fix|efficiency-fix|miss-landing|unsaved-promise|promise-proof|closure-line|claim-ahead)$/.test(p.id) ? 'undone work' : /^(?:prevention-line|leap-line|efficiency-none|answer-first|checked-line|dangling-ref)$/.test(p.id) ? 'footer/format' : 'other'
 }
 // 0.6.25 write-time category from the problem labels (precedence as in the 13 Nov Scoreboard triage).
 export const deepCategory = (labels: readonly string[]): string =>
@@ -1624,9 +1758,9 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.27'
-type Stats = { date: string; prompts: number; firstPass: number; rounds: number; unchecked: number; jc: number; jok: number; jun: number; tin: number; tout: number; tcache: number; epoch?: string; eRounds: number; eFail: boolean; closed?: string; fc: Record<string, number>; dh: Record<string, number>; ds: Record<string, string[]>; tms: number; tn: number; tmax: number; jms: number; crms: number; eT0?: number; eT1?: number }
-export type StatsRow = { source: 'deep-stats'; date: string; session: string; plugin_version: string; prompts_judged: number; first_draft_pass: number; unchecked: number; rounds_total: number; judge_calls: number; judge_ok: number; judge_unavailable: number; tokens_in: number; tokens_out: number; tokens_cache: number; fail_checks: Record<string, number>; dark_hits: Record<string, number>; dark_samples: Record<string, string[]>; turn_ms_total: number; turn_count: number; turn_ms_max: number; judge_ms_total: number; checker_rounds_ms_total: number }
+export const PLUGIN_VERSION = '0.6.28'
+type Stats = { date: string; prompts: number; firstPass: number; rounds: number; unchecked: number; uu: number; att?: string; so?: string; jc: number; jok: number; jun: number; tin: number; tout: number; tcache: number; epoch?: string; eRounds: number; eFail: boolean; closed?: string; fc: Record<string, number>; dh: Record<string, number>; ds: Record<string, string[]>; tms: number; tn: number; tmax: number; jms: number; crms: number; eT0?: number; eT1?: number }
+export type StatsRow = { source: 'deep-stats'; date: string; session: string; plugin_version: string; prompts_judged: number; first_draft_pass: number; unchecked: number; unchecked_unattended: number; attended: string; session_origin: string; rounds_total: number; judge_calls: number; judge_ok: number; judge_unavailable: number; tokens_in: number; tokens_out: number; tokens_cache: number; fail_checks: Record<string, number>; dark_hits: Record<string, number>; dark_samples: Record<string, string[]>; turn_ms_total: number; turn_count: number; turn_ms_max: number; judge_ms_total: number; checker_rounds_ms_total: number }
 // 0.6.24 speed meter: wall ms turn.start -> turn.complete of deep J-prompt turns (total, count, max), judge call ms, and checker rounds ms (first to last check_reply round end, per prompt; a one-round prompt adds 0). Counts only.
 // 0.6.23: dark-check would-be hits per id (dark_hits) and the last 3 snippets each (dark_samples, whole field <= 3000 chars), so a reviewer can tell real misses from false alarms. Snippets are reply text or the check's own message only.
 export const DARK_SAMPLES_CAP = 3000
@@ -1644,7 +1778,7 @@ const readStats = async ($: EngineInterface, sid: string, date: string): Promise
   const v = await Promise.resolve().then(() => $.store.get(`${STATS_KEY}:${sid}`)).catch(() => undefined) as Partial<Stats> | undefined
   const fresh = v?.date === date
   const n = (x: unknown): number => (fresh ? Number(x) || 0 : 0)
-  return { date, prompts: n(v?.prompts), firstPass: n(v?.firstPass), rounds: n(v?.rounds), unchecked: n(v?.unchecked), jc: n(v?.jc), jok: n(v?.jok), jun: n(v?.jun), tin: n(v?.tin), tout: n(v?.tout), tcache: n(v?.tcache), epoch: v?.epoch, eRounds: Number(v?.eRounds) || 0, eFail: v?.eFail === true, closed: v?.closed, tms: n(v?.tms), tn: n(v?.tn), tmax: n(v?.tmax), jms: n(v?.jms), crms: n(v?.crms), eT0: Number(v?.eT0) || undefined, eT1: Number(v?.eT1) || undefined, fc: fresh && v?.fc && typeof v.fc === 'object' ? Object.fromEntries(Object.entries(v.fc).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {}, dh: fresh && v?.dh && typeof v.dh === 'object' ? Object.fromEntries(Object.entries(v.dh).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {}, ds: fresh && v?.ds && typeof v.ds === 'object' ? Object.fromEntries(Object.entries(v.ds).map(([k, a]) => [k, Array.isArray(a) ? a.map(x => String(x).slice(0, 160)) : []])) : {} }
+  return { date, prompts: n(v?.prompts), firstPass: n(v?.firstPass), rounds: n(v?.rounds), unchecked: n(v?.unchecked), uu: n(v?.uu), att: typeof v?.att === 'string' ? v.att : undefined, so: typeof v?.so === 'string' ? v.so : undefined, jc: n(v?.jc), jok: n(v?.jok), jun: n(v?.jun), tin: n(v?.tin), tout: n(v?.tout), tcache: n(v?.tcache), epoch: v?.epoch, eRounds: Number(v?.eRounds) || 0, eFail: v?.eFail === true, closed: v?.closed, tms: n(v?.tms), tn: n(v?.tn), tmax: n(v?.tmax), jms: n(v?.jms), crms: n(v?.crms), eT0: Number(v?.eT0) || undefined, eT1: Number(v?.eT1) || undefined, fc: fresh && v?.fc && typeof v.fc === 'object' ? Object.fromEntries(Object.entries(v.fc).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {}, dh: fresh && v?.dh && typeof v.dh === 'object' ? Object.fromEntries(Object.entries(v.dh).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {}, ds: fresh && v?.ds && typeof v.ds === 'object' ? Object.fromEntries(Object.entries(v.ds).map(([k, a]) => [k, Array.isArray(a) ? a.map(x => String(x).slice(0, 160)) : []])) : {} }
 }
 // One or more dark would-be hits ({id, snip}); live checks never reach here. Refreshes today's row when it already exists.
 export async function statsDark($: EngineInterface, hits: { id: string; snip?: string }[]): Promise<void> {
@@ -1658,7 +1792,7 @@ export async function statsDark($: EngineInterface, hits: { id: string; snip?: s
     }
     st.ds = trimSamples(st.ds)
     await $.store.set(`${STATS_KEY}:${sid}`, st)
-    if (st.prompts + st.unchecked > 0) { await upsertRows($, [{ id: `deepstats-${sid}-${date}`, data: statsRow(sid, date, st) }]); await corrFlush($).catch(() => 0) }
+    if (st.prompts + st.unchecked + (st.uu ?? 0) > 0) { await upsertRows($, [{ id: `deepstats-${sid}-${date}`, data: statsRow(sid, date, st) }]); await corrFlush($).catch(() => 0) }
   } catch { /* logging never affects a turn */ }
 }
 async function statsRound($: EngineInterface, epoch: string | number, failed: boolean, ids: string[] = []): Promise<void> {
@@ -1666,7 +1800,7 @@ async function statsRound($: EngineInterface, epoch: string | number, failed: bo
   const same = st.epoch === e, at = await nowMs($)
   await $.store.set(`${STATS_KEY}:${sid}`, { ...st, eT0: same && st.eT0 !== undefined ? st.eT0 : at, eT1: at, rounds: st.rounds + 1, epoch: e, eRounds: (same ? st.eRounds : 0) + 1, eFail: (same && st.eFail) || failed, fc: failed ? ids.reduce((a, id) => ({ ...a, [id]: (a[id] ?? 0) + 1 }), { ...st.fc }) : st.fc })
 }
-export const statsRow = (sid: string, date: string, st: Stats): StatsRow => ({ source: 'deep-stats', date, session: sid, plugin_version: PLUGIN_VERSION, prompts_judged: st.prompts, first_draft_pass: st.firstPass, unchecked: st.unchecked, rounds_total: st.rounds,
+export const statsRow = (sid: string, date: string, st: Stats): StatsRow => ({ source: 'deep-stats', date, session: sid, plugin_version: PLUGIN_VERSION, prompts_judged: st.prompts, first_draft_pass: st.firstPass, unchecked: st.unchecked, unchecked_unattended: st.uu ?? 0, attended: st.att ?? '', session_origin: st.so ?? '', rounds_total: st.rounds,
   judge_calls: st.jc, judge_ok: st.jok, judge_unavailable: st.jun, tokens_in: st.tin, tokens_out: st.tout, tokens_cache: st.tcache, fail_checks: { ...st.fc }, dark_hits: { ...st.dh }, dark_samples: trimSamples(st.ds), turn_ms_total: st.tms, turn_count: st.tn, turn_ms_max: st.tmax, judge_ms_total: st.jms, checker_rounds_ms_total: st.crms })
 // One judge call: running per-session/day totals (never re-summed from the shared judgeLog).
 export async function statsJudge($: EngineInterface, status: string, tk: { input: number; output: number; cache: number }, ms = 0): Promise<void> {
@@ -1675,7 +1809,7 @@ export async function statsJudge($: EngineInterface, status: string, tk: { input
 }
 // End of a deep J-prompt turn (also when the reply went out only via SendUserMessage: final text empty). `reply`: 'short' = exempt from check_reply,
 // 'unchecked' = long final text that never went through check_reply, 'none' = no final text. A checked prompt (eRounds > 0) is counted from the epoch rounds.
-export async function statsTurnEnd($: EngineInterface, epoch: string | number, reply: 'short' | 'unchecked' | 'none', turnMs = 0): Promise<void> {
+export async function statsTurnEnd($: EngineInterface, epoch: string | number, reply: 'short' | 'unchecked' | 'none', turnMs = 0, who?: SessionWho): Promise<void> {
   try {
     const sid = String(await $.session.id()), date = sgtIso(await nowMs($)).slice(0, 10), st = await readStats($, sid, date), e = String(epoch)
     if (st.closed === e) return // one count per prompt
@@ -1684,13 +1818,33 @@ export async function statsTurnEnd($: EngineInterface, epoch: string | number, r
       st.prompts += 1
       if (!(checked && st.eFail)) st.firstPass += 1
     }
-    if (reply === 'unchecked') st.unchecked += 1
+    if (reply === 'unchecked') { if (who?.unattended === true) st.uu += 1; else st.unchecked += 1 }
+    if (who !== undefined) { st.att = who.attended; st.so = who.origin }
     st.closed = e
     const tm = Number.isFinite(turnMs) && turnMs > 0 ? Math.round(turnMs) : 0
     st.tms += tm; st.tn += 1; st.tmax = Math.max(st.tmax, tm)
     if (st.epoch === e && st.eT0 !== undefined && st.eT1 !== undefined) st.crms += Math.max(0, st.eT1 - st.eT0)
     await $.store.set(`${STATS_KEY}:${sid}`, st)
-    if (st.prompts + st.unchecked === 0) return
+    if (st.prompts + st.unchecked + (st.uu ?? 0) === 0) return
+    await upsertRows($, [{ id: `deepstats-${sid}-${date}`, data: statsRow(sid, date, st) }])
+    await corrFlush($).catch(() => 0)
+  } catch { /* logging never affects a turn */ }
+}
+// 0.6.28: who reads this session. `attended` / `origin` are the session's CLAUDE_CODE_SESSION_ATTENDED / CLAUDE_CODE_SESSION_ORIGIN ('' when unset);
+// unattended = ATTENDED is "0" (a run nobody watches, e.g. a scheduled task's fresh session): its unchecked replies count apart (unchecked_unattended).
+export type SessionWho = { attended: string; origin: string; unattended: boolean }
+export async function sessionWho($: EngineInterface): Promise<SessionWho> {
+  const get = async (k: 'a' | 'o'): Promise<string> => { try { return String((k === 'a' ? await $.env.get('CLAUDE_CODE_SESSION_ATTENDED') : await $.env.get('CLAUDE_CODE_SESSION_ORIGIN')) ?? '') } catch { return '' } }
+  const attended = await get('a'), origin = await get('o')
+  return { attended, origin, unattended: attended === '0' }
+}
+// 0.6.28: one unchecked reply seen at a Stop (each Stop of a Stop-hook chain, not only the last text turn.complete sees). Does not close the prompt.
+export async function statsUnchecked($: EngineInterface, who?: SessionWho): Promise<void> {
+  try {
+    const sid = String(await $.session.id()), date = sgtIso(await nowMs($)).slice(0, 10), st = await readStats($, sid, date)
+    if (who?.unattended === true) st.uu += 1; else st.unchecked += 1
+    if (who !== undefined) { st.att = who.attended; st.so = who.origin }
+    await $.store.set(`${STATS_KEY}:${sid}`, st)
     await upsertRows($, [{ id: `deepstats-${sid}-${date}`, data: statsRow(sid, date, st) }])
     await corrFlush($).catch(() => 0)
   } catch { /* logging never affects a turn */ }
@@ -1718,13 +1872,13 @@ export async function deepGate($: EngineInterface, said: string, facts: DeepFact
   const cap = maxCap === undefined ? denyCap() : Math.min(maxCap, denyCap())
   const all = deepProblems(said, facts)
   // DARK checks are unvalidated: logged as would-be hits ({dark:true}), never denying. With a judge answer, DEEP_DARK ids are dark too; judge problems deny.
-  const dark = (id: string): boolean => DARK.has(id) || (judged !== undefined && DEEP_DARK.has(id))
+  const dark = (id: string): boolean => logOnly(id) || (judged !== undefined && DEEP_DARK.has(id))
   const before = await failCount($, deniedSoFar, epoch)
   const claimKey = `deepClaim:${await Promise.resolve().then(() => $.session.id()).catch(() => '?')}`
   const claimRound = String(await Promise.resolve().then(() => $.store.get(claimKey)).catch(() => '') ?? '') === String(epoch) // an earlier judged (a)/(b) round failed in this prompt: effective cap is one higher
   // 0.6.17: after a failed round in this prompt, "Efficiency: none" is not accepted. It counts (denies) only when the effective cap is at least 2; else it goes into the note.
   const effOk = cap >= 2 || (cap === 1 && claimRound)
-  const effNone: Problem[] = before > 0 && /^[\s>*_-]*(?:\*\*|__)?Efficiency:(?:\*\*|__)?\s*none\b/im.test(said) ? [{ id: 'efficiency-none', weak: !effOk, text: `Efficiency: none after ${before} failed check round${before === 1 ? '' : 's'} — state what the first draft lacked, as a fact; a could/would/should fix needs the change made this turn` }] : []
+  const effNone: Problem[] = before > 0 && EFF_NONE.test(said) ? [{ id: 'efficiency-none', weak: !effOk, text: `Efficiency: none after ${before} failed check round${before === 1 ? '' : 's'} — state what the first draft lacked, as a fact; a could/would/should fix needs the change made this turn` }] : []
   const probs = [...all.filter(x => !dark(x.id)), ...effNone, ...pre, ...(judged?.problems ?? [])]
   const soft = all.filter(x => dark(x.id))
   if (soft.length > 0) await Promise.resolve().then(async () => {
@@ -1739,6 +1893,8 @@ export async function deepGate($: EngineInterface, said: string, facts: DeepFact
   const extra = maxCap === undefined && cap > 0 && before < cap + 1 && (claim.length > 0 || (claimRound && cap === 1 && effNone.length > 0 && !effNone[0].weak))
   if (hard.length > 0 && (before < cap || extra)) {
     const n = before + 1
+    // 0.6.28: this round fails, so "Efficiency: none" would be refused on the next one: name it now (same check, reported a round early; pass/fail unchanged).
+    if (before === 0 && EFF_NONE.test(said)) probs.push({ id: 'efficiency-none', text: 'Efficiency: none will be flagged on the retry because this round fails \u2014 state what the first draft lacked, as a fact; a could/would/should fix needs the change made this turn' })
     if (claim.length > 0) await Promise.resolve().then(() => $.store.set(claimKey, String(epoch))).catch(() => undefined)
     await Promise.resolve().then(() => $.store.set(key, `${epoch}:${n}`)).catch(() => undefined)
     await Promise.resolve().then(async () => {
@@ -1856,7 +2012,10 @@ export const register: Register = on => {
   let early = '' // 0.6.10: text known before the first work call — the turn's opening text plus SendUserMessage texts sent at work 0
 
   let epoch = '0' // one per J prompt (time + random, survives a reload): the per-draft failure count in the store belongs to one epoch
-  const newEpoch = (): void => { epoch = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`; denied = 0 }
+  const newEpoch = (): void => { epoch = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`; denied = 0; countedUnchecked.clear(); stopBlocked.clear() }
+  const countedUnchecked = new Set<string>() // 0.6.28: hashes of unchecked replies already counted this prompt (Stop and turn end see the same text)
+  const stopBlocked = new Set<string>() // 0.6.28: hashes the Stop re-check already blocked once this prompt (never twice: no loop)
+  let who: SessionWho | undefined // 0.6.28: read once per module load
   let turnResults = '' // this turn's tool results (tool + first 1500 chars each, last 6000 kept): the judge's hook evidence
   let sendOk = true // this session's tool list carries check_reply (re-registered at each deep prompt if missing); else deep behaves as light
   let hadLeap = false // an earlier text this turn (passed by check_reply or sent) already carried a Leap line
@@ -1866,11 +2025,14 @@ export const register: Register = on => {
   let checkN = 0 // 0.6.25: main-thread check_reply calls this turn (evidence-first acts on the first only)
   let evTool = false // 0.6.25: an evidence call ran this turn (lookup, Bash, ArtifactData/Artifact read, memory read) or an agent report arrived
   let changed = false // 0.6.25: a real change ran this turn (closure-line): not a plan/log write
+  let acts: Act[] = [] // 0.6.28 claim-ahead: this turn's successful main-thread writes, launches, sends and finished-agent reports
+  let boardLive = false // 0.6.28 claim-ahead: the last task-list or status-board read (or a board write) this session showed a live job; not reset per turn
+  let openNow = false // 0.6.28 claim-ahead: a job launched earlier is still open (launch records or the board), refreshed before each draft check
   let lastFacing: string[] = [] // 0.6.25: J-facing texts of the last main turn (sent messages + final reply)
   let priorFacing: string[] = [] // 0.6.25: in a Stop-hook continuation turn, what J already saw in the turn it blocked
   const finalPassed = new Set<string>() // hashes check_reply passed this turn: the final reply should be one of them
   const passed = new Map<string, string>() // 0.6.16: hashes of drafts check_reply passed -> note (sent-with-open-problems), consumed by the matching SendUserMessage
-  const facts = (): DeepFacts => ({ asked, corpus: `${corpus} ${turnCorpus}`, looked, anyTool, jTurn, acted: acted || landed || wrote, landed, saved: savedWide, askTool, wrote, hadLeap, hadEff, launch: proof, changed })
+  const facts = (): DeepFacts => ({ asked, corpus: `${corpus} ${turnCorpus}`, looked, anyTool, jTurn, acted: acted || landed || wrote, landed, saved: savedWide, askTool, wrote, hadLeap, hadEff, launch: proof, changed, acts, open: openNow })
   const capNote = (probs: Problem[], c = denyCap()): string => `Deep mode: sent after ${c} failed checks with open problems (${probs.map(x => x.text).join('; ')}).`
   // 0.6.21: the judge also sees what SendUserMessage already told J this turn, so a final reply is not failed for 'not answering' a question a mid-turn message answered.
   const sentEvidence = (ev: string): string => {
@@ -1999,9 +2161,18 @@ export const register: Register = on => {
 
   // 0.6.25: the prompt-type Stop hook (hooks.json) judges a reply after J saw it; its criteria now run in check_reply's judge, so a final
   // reply check_reply passed this turn ends the chain here and the Stop hook only reviews replies that skipped check_reply.
+  // 0.6.28: every Stop of a deep J turn whose text needs check_reply (not short-exempt) and matched no PASS is counted here, so a reply the Stop
+  // hook blocked and the continuation replaced still counts (turn.complete sees only the last text). In an attended session the first such Stop
+  // of a text is blocked once with STOP_RECHECK: the model checks the text J already has and sends only a correction, or nothing.
   on('classic.Stop', async ($, e, next) => {
     const last = String((e as Record<string, unknown>).last_assistant_message ?? '')
     if (last.trim() !== '' && finalPassed.has(replyHash(last))) return {}
+    if (last.trim() !== '' && jTurn && sendOk && !skipJudge(last, asked) && (await readMode($, mode)) === 'deep') {
+      const h = replyHash(last)
+      who ??= await sessionWho($)
+      if (!countedUnchecked.has(h)) { countedUnchecked.add(h); await statsUnchecked($, who) }
+      if (!who.unattended && !stopBlocked.has(h)) { stopBlocked.add(h); return { block: STOP_RECHECK } }
+    }
     return next(e)
   })
 
@@ -2047,6 +2218,7 @@ export const register: Register = on => {
       savePass = false
       checkN = 0
       changed = false
+      acts = !isJ(e.text) && AGENT_REPORT.test(String(e.text ?? '')) ? [{ kind: 'report', tgt: '', hay: String(e.text ?? '').slice(0, 20_000).toLowerCase() }] : [] // 0.6.28: a turn opened by an agent report carries that report
       evTool = !isJ(e.text) && AGENT_REPORT.test(String(e.text ?? '')) // 0.6.25: a turn opened by an agent report has its evidence
       priorFacing = STOP_FEEDBACK.test(String(e.text ?? '').slice(0, 600)) ? lastFacing : [] // 0.6.25: a Stop-hook continuation
       hadLeap = false
@@ -2093,13 +2265,16 @@ export const register: Register = on => {
       const x = e as Record<string, unknown>
       // 0.6.25 evidence-first: the turn's first check_reply is refused once when the draft states current state or answers a correction/re-ask before any evidence call.
       checkN += 1
+      openNow = boardLive || (await openCount($).catch(() => 0)) > 0
       const ef = num('evidence-first', 'enforce')
       if (checkN === 1 && ef > 0 && !evTool && priorFacing.length === 0 && evidenceFirstHit(text, midQ.length > 0 ? midQ.map(m => m.text).join('\n') : asked || String(x.ask ?? ''))) {
         await Promise.resolve().then(async () => { const log = await $.store.get(DENY_LOG_KEY); await $.store.set(DENY_LOG_KEY, [...(Array.isArray(log) ? log : []), { time: sgtIso(await nowMs($)), session: await $.session.id(), n: 0, ...(ef < 2 ? { dark: true } : {}), checks: ['evidence-first'] }].slice(-500)) }).catch(() => undefined)
         if (ef < 2) await statsDark($, [{ id: 'evidence-first', snip: text.slice(0, 160) }])
         else {
           await recordOutcome($, epoch, [{ id: 'evidence-first', text: msg('evidence-first') }], 'fail', 0).catch(() => undefined)
-          return { result: `Deep mode: ${msg('evidence-first')}` }
+          // 0.6.28: the footer checks run now too, so the redraft fixes them with the lookup instead of failing a round later. Listed only: this refusal's outcome is unchanged.
+          const ff = deepProblems(text, facts()).filter(p => FOOTER_IDS.has(p.id) && !logOnly(p.id))
+          return { result: `Deep mode: ${msg('evidence-first')}${ff.length === 0 ? '' : ` Also fix these footer lines in the redraft: ${numbered(ff)}`}` }
         }
       }
       const mc = midCap() // 0.6.20: a reply to a pending mid-turn message gets mid-turn.rounds failed rounds, no extra round
@@ -2125,7 +2300,7 @@ export const register: Register = on => {
       if (rp.length > 0) pre.push({ id: 'stop-repeat', text: `Stop-hook continuation: J already saw this; send only what is new, or no text if the fix was bookkeeping: ${rp.slice(0, 3).map(l => `"${l.slice(0, 60)}"`).join('; ')}` })
 
       // 0.6.22: cheap rule checks run first; a draft that already fails one comes back at once, without the slower judge call.
-      const ruleFirst = !atCap && deepProblems(text, f).some(p => !DARK.has(p.id) && !DEEP_DARK.has(p.id))
+      const ruleFirst = !atCap && deepProblems(text, f).some(p => !logOnly(p.id) && !DEEP_DARK.has(p.id))
       const jr = pre.length > 0 || ruleFirst || skipJudge(text, f.asked || String(x.ask ?? '')) ? undefined : await judgeReply($, text, askNote(f.asked || String(x.ask ?? '').trim(), mc === undefined && delivered.length > 0), sentEvidence(String(x.evidence ?? '')), turnResults, f)
       const g = await deepGate($, text, f, denied, epoch, jr === undefined || jr.status === 'unavailable' ? undefined : { problems: jr.problems.map(t => ({ id: 'judge', text: `judge: ${t}` })) }, atCap && jr === undefined, pre, mc)
       denied = g.denied
@@ -2210,7 +2385,14 @@ export const register: Register = on => {
           if (pass !== '') notes.push(pass)
         } else {
           const mc = midCap() // 0.6.20: a reply to a pending mid-turn message: mid-turn.rounds, no extra round
-          const g = await deepGate($, said, facts(), denied, epoch, undefined, false, [], mc)
+          openNow = boardLive || (await openCount($).catch(() => 0)) > 0 // 0.6.28 claim-ahead: refresh before facts() so the send path sees open jobs
+          // 0.6.28 send = check: an unchecked SendUserMessage gets the same AI judge as check_reply (rule checks first; none at the cap or for a short text).
+          const sf = facts(), sAsk = mc === undefined ? sf.asked : midQ.map(m => m.text).join('\n')
+          const sCap = await failCount($, denied, epoch) >= (mc === undefined ? denyCap() : Math.min(mc, denyCap()))
+          const sRule = deepProblems(said, sf).some(p => !DARK.has(p.id) && !DEEP_DARK.has(p.id))
+          const sj = SEND_JUDGE && !sCap && !sRule && !skipJudge(said, sAsk) ? await judgeReply($, said, askNote(sAsk, mc === undefined && delivered.length > 0), sentEvidence(''), turnResults, { ...sf, asked: sAsk }) : undefined
+          // judge problems go in as `pre`, not `judged`: the narrow checks stay live on this path (never loosened by the judge's answer)
+          const g = await deepGate($, said, sf, denied, epoch, undefined, false, sj === undefined || sj.status === 'unavailable' ? [] : sj.problems.map(t => ({ id: 'judge', text: `judge: ${t}` })), mc)
           denied = g.denied
           if (g.probs.length > 0 && !g.capped) return { deny: `Deep mode: call check_reply first. Fix these before J sees the reply (${g.denied}/${mc === undefined ? denyCap() : Math.min(mc, denyCap())}), check with check_reply, then resend with SendUserMessage: ${numbered(g.probs)}` }
           if (g.capped) notes.push(capNote(g.probs, mc === undefined ? denyCap() : Math.min(mc, denyCap())))
@@ -2312,7 +2494,9 @@ export const register: Register = on => {
       anyTool = true
       if (e.agentId === undefined && evidenceCall(e as unknown as Record<string, unknown>)) evTool = true
       if (e.agentId === undefined && realChange(e as unknown as Record<string, unknown>)) changed = true
+      if (e.agentId === undefined && e.tool !== CHECK_TOOL && acts.length < 400) acts.push(...actsOf(e as unknown as Record<string, unknown>, String(ran.text ?? (typeof ran.result === 'string' ? ran.result : JSON.stringify(ran.result ?? '')))))
       if (/^(WebSearch|WebFetch)$|__(get_page_text|read_page)$/.test(e.tool) && webText.length < 200_000) webText += ` ${ran.text ?? (typeof ran.result === 'string' ? ran.result : JSON.stringify(ran.result ?? ''))}`
+      if (e.agentId === undefined) { const bl = liveJobsOf(e as unknown as Record<string, unknown>, String(ran.text ?? (typeof ran.result === 'string' ? ran.result : JSON.stringify(ran.result ?? '')))); if (bl !== undefined) boardLive = bl }
       if (ARTIFACT_DATA.test(e.tool) && ['set', 'update', 'batch'].includes(String((e as Record<string, unknown>).action))) {
         boarded = true
         if (boardWrite(e as unknown as Record<string, unknown>)) boardRow = true
@@ -2378,7 +2562,11 @@ export const register: Register = on => {
         await $.store.set(DENY_LOG_KEY, [...(Array.isArray(log) ? log : []), { time: sgtIso(await nowMs($)), session: await $.session.id(), n: 0, final: skipJudge(String(e.answer ?? ''), asked) ? 'short' : 'unchecked', checks: [] }].slice(-500))
       }).catch(() => undefined)
     }
-    if (jTurn && sendOk && (await readMode($, mode)) === 'deep') await statsTurnEnd($, epoch, !finalText ? 'none' : skipJudge(String(e.answer ?? ''), asked) ? 'short' : skipDeep ? 'none' : 'unchecked', turnT0 > 0 ? await nowMs($) - turnT0 : 0)
+    if (jTurn && sendOk && (await readMode($, mode)) === 'deep') {
+      who ??= await sessionWho($)
+      const seen = countedUnchecked.has(replyHash(String(e.answer ?? ''))) // 0.6.28: already counted at its Stop
+      await statsTurnEnd($, epoch, !finalText ? 'none' : skipJudge(String(e.answer ?? ''), asked) ? 'short' : skipDeep || seen ? 'none' : 'unchecked', turnT0 > 0 ? await nowMs($) - turnT0 : 0, who)
+    }
     let line: string | undefined
     if (rx('running-proof','claim').test(e.answer) && unproven(e.answer, proof || (await openCount($)) > 0)) line = msg('running-proof')
     else if (!idleFired && idleClaim(e.answer)) line = msg('idle-guard')
