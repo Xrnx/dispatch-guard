@@ -1942,9 +1942,9 @@ test('0.6.15 prevention-line: Correction: line with no Prevention: line fires; b
 })
 
 test('0.6.15 correctionWithoutPrevention: label lines only, code and drafts excluded', () => {
-  expect(correctionWithoutPrevention('Correction: x')).toBe(true)
-  expect(correctionWithoutPrevention('**Correction (10:36):** x')).toBe(true)
-  expect(correctionWithoutPrevention('Correction: x\nPrevention: y')).toBe(false)
+  expect(correctionWithoutPrevention('Correction: x was wrong')).toBe(true)
+  expect(correctionWithoutPrevention('**Correction (10:36):** x was wrong')).toBe(true)
+  expect(correctionWithoutPrevention('Correction: x was wrong\nPrevention: y')).toBe(false)
   expect(correctionWithoutPrevention('See `Correction: x` here')).toBe(false)
   expect(correctionWithoutPrevention('Correction was applied.')).toBe(false)
   expect(correctionWithoutPrevention('```\nCorrection: x\n```')).toBe(false)
@@ -2227,7 +2227,7 @@ test('judge: request carries haiku, cached rules, low effort, 400 tokens, 8s tim
   expect(String(c.prompt)).not.toContain('EXTRARULE')
   expect(String(c.prompt).match(/<\/draft>/g)?.length).toBe(1) // a "</draft>" inside the draft is escaped
   expect(Object.keys((CHECK_SPEC.inputSchema as any).properties).sort()).toEqual(['ask', 'evidence', 'text'])
-  expect(JUDGE_RULES.split(/\s+/).length).toBeLessThanOrEqual(360)
+  expect(JUDGE_RULES.split(/\s+/).length).toBeLessThanOrEqual(380)
   // 0.6.25: numbered pre-draft checklist (8 lines) + one flow line
   expect(DEEP_LINE).toMatch(/\{text, ask, evidence\}/)
   expect(DEEP_LINE).toMatch(/write that exact text as your final reply: nothing before or after it/)
@@ -2544,7 +2544,7 @@ test('0.6.17 defaults: cap 1, judge floor 60 words, judge rules ≤250 words and
   setRules(bundledRules())
   expect(denyCap()).toBe(1)
   expect(judgeRules()).toBe(JUDGE_RULES)
-  expect(JUDGE_RULES.split(/\s+/).length).toBeLessThanOrEqual(360)
+  expect(JUDGE_RULES.split(/\s+/).length).toBeLessThanOrEqual(380)
   expect(JUDGE_RULES).toMatch(/At most 3 problems/)
   expect(JUDGE_RULES).toMatch(/Do NOT flag/)
   expect(JUDGE_RULES).toMatch(/Footer, sleep, checked:, Correction\/Prevention\/Why lines are never problems for being unasked/)
@@ -2966,7 +2966,7 @@ test('0.6.18 own prior replies are not evidence: kept out of the judge block (mo
   const r = await $.tool.call(chk(`${LONGW}\n0.6.18 is live (verified earlier).`, { evidence: 'live, verified earlier \u2190 agent report 12:01' })) as any
   expect(r.result).toMatch(/judge: \(b\)/)
   expect(String(judge.calls[0].prompt)).not.toContain('PRIORCLAIM')
-  expect(JUDGE_RULES.split(/\s+/).length).toBeLessThanOrEqual(360)
+  expect(JUDGE_RULES.split(/\s+/).length).toBeLessThanOrEqual(380)
 })
 test('0.6.18 MISSING_LINE drops only missing-footer problems', () => {
   for (const t of ['(b) "deployed": no tool result shows it; run the check next', '(b) "verified" but no file was checked this turn', '(c) the draft says wait; no need to wait for the next turn', '(a) the log is missing; the next run shows 2 fails']) expect([t, MISSING_LINE.test(t)]).toEqual([t, false])
@@ -3018,7 +3018,7 @@ test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft pas
   expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
   expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 1, judge_ok: 1, judge_unavailable: 0, tokens_in: 100, tokens_out: 20, tokens_cache: 50 })
   expect(Object.values(d.fail_checks).reduce((a: number, b: any) => a + b, 0)).toBeGreaterThanOrEqual(2) // 0.6.22: the two failed BADC rounds are counted by check id
-  expect(PLUGIN_VERSION).toBe('0.6.31')
+  expect(PLUGIN_VERSION).toBe('0.6.32')
 })
 test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
   const { mem } = deepEngine(on, true)
@@ -4260,10 +4260,10 @@ test('0.6.29 fix d: the first deep J turn on a new version queues one Scoreboard
   await $.turn.complete(end('d2', 'Noted.'))
   const rows = ((mem.corrLog as any[]) ?? []).filter(r => r.collection === 'fixes')
   expect(rows.length).toBe(1)
-  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0631', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.31' } })
+  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0632', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.32' } })
   expect(rows[0].data.detail).toContain(CHANGELOG_LINE)
-  expect(mem[VERSION_ROW_KEY]).toBe('0.6.31')
-  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.31 (auto)')
+  expect(mem[VERSION_ROW_KEY]).toBe('0.6.32')
+  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.32 (auto)')
 })
 
 // 0.6.30 cross-turn bleed (live 13 Nov 12:37-12:39 SGT): rule (d) cited "Are you done with all fixes?" (12:35, answered) against later asks.
@@ -4357,4 +4357,33 @@ test('W2 judge (b): the unsupported-claim problem names its lookup; (a) and unta
   expect(r).toMatch(/^Deep mode: fix these/)
   expect(r).toMatch(/judge: \(b\) "0\.6\.28 is being scored, due about 11:45" has no evidence → Lookup per claim type: a\) version: plugin: grep[^]*b\) status: agent\/job: ArtifactData list[^]*c\) time: clock[^]*Hook read[^)]*\): now /)
   expect(r).toMatch(/judge: \(a\) "0\.6\.27 is live" contradicts the grep(?! →)/)
+})
+
+import { lightCorrection, LIGHT_WORDS } from './register'
+// 0.6.32 W6: light clarification threshold. Noise cases are real replies of 13 Nov 12:37-13:17 SGT; miss cases must keep the full block.
+const NOISE = [
+  'Correction: the end-of-reply recheck has fired once, in this chat. It isn\'t yet confirmed across your other chats.',
+  'Correction: the 0.6.29 fix is intended, not built or tested yet.',
+  'Correction: 0.6.29 is downloaded to this session, but I haven\'t seen it run yet. The "upload card" is the For J item, now marked done.',
+]
+const MISSES = [
+  'Correction: my last reply was wrong. Those skips were long replies that should have gone through the check.', // wrong + J-caught class
+  'Correction: 09:30 is when you\'ll be back, not when the checks stop.', // swapped time, acted on
+  '**Correction:** I passed on the "skip" figure without checking what it counted.',
+]
+test('W6 light Correction: 3 real noise cases need no Prevention/Why block', () => {
+  for (const n of NOISE) { expect(lightCorrection(n)).toBe(true); expect(correctionWithoutPrevention(n)).toBe(false); expect(preventionWithoutWhy(n)).toBe(false) }
+  expect(correctionWithoutPrevention('Clarification: "round" means one draft check.')).toBe(false)
+})
+test('W6 real misses still require the full block', () => {
+  for (const m of MISSES) { expect(lightCorrection(m)).toBe(false); expect(correctionWithoutPrevention(m)).toBe(true); expect(preventionWithoutWhy(m + '\nPrevention: x')).toBe(true) }
+  expect(correctionWithoutPrevention(MISSES[1] + '\nPrevention: x')).toBe(false)
+  expect(preventionWithoutWhy(MISSES[1] + '\nPrevention: x\nWhy you caught it: y')).toBe(false)
+})
+test('W6 threshold edges: over the word limit, long Clarification, mixed lines', () => {
+  const long = 'Correction: ' + Array(LIGHT_WORDS + 1).fill('word').join(' ')
+  expect(lightCorrection(long)).toBe(false)
+  expect(correctionWithoutPrevention('Clarification: ' + Array(LIGHT_WORDS + 1).fill('word').join(' '))).toBe(true)
+  expect(correctionWithoutPrevention(`${NOISE[1]}\n${MISSES[0]}`)).toBe(true)
+  expect(closureMisses(NOISE[1], {})).toEqual([])
 })

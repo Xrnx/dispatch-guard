@@ -421,16 +421,33 @@ export const unsourcedFigures = (answer: string, corpus: string, prompt = ''): s
 // 0.6.15 prevention-line: a line starting "Correction:" with no line starting "Prevention:" in the same reply (drafts, code, blockquotes
 // and quoted spans excluded). Bold or bullet marks allowed before the label.
 const LABEL_LINE = (w: string): RegExp => new RegExp(String.raw`^[ \t]*(?:[-*+•][ \t]+)?(?:\*\*|__)?[ \t]*${w}\b[^:\n]{0,30}:`, 'im')
+// 0.6.32 W6 light clarification: a one-line Correction:/Clarification: of the reply's own wording (<= LIGHT_WORDS words) needs no Prevention/Why block.
+// It is NOT light when it admits a process miss (J caught it, I missed/forgot/without checking, wrong/mistake/should have), or swaps one figure/time/count
+// for another ("is 09:30, not 10:00"): those are real misses and keep the full block. Version strings (0.6.29) are not figures.
+export const LIGHT_WORDS = 25
+const MISS_WORDS = /\b(?:wrong|incorrect|mistake[n]?|error|misread|mis-?stated|miscounted|false|should have|shouldn'?t have|forgot|missed|failed|overlooked|(?:you|J)\s+(?:caught|spotted|noticed|asked|flagged)|(?:I|we)\s+(?:never|didn'?t|did not|passed on|assumed|guessed)|without\s+(?:\w+ing|a check)|not\s+(?:true|correct|right))\b/i
+const SWAP_WORDS = /\b(?:not|instead|rather than|actually|was|were|now)\b/i
+const LIGHT_STATUS = /\b(?:not|n'?t|never)\b[^.\n]{0,40}\b(?:yet|built|tested|confirmed|verified|seen|run|ran)\b|\b(?:haven'?t|hasn'?t|isn'?t)\b/i
+export const lightCorrection = (line: string): boolean => {
+  const m = /^[ \t>]*(?:[-*+\u2022][ \t]+)?(?:\*\*|__)?[ \t]*(?:Correction|Clarification)\b[^:\n]{0,30}:(?:\*\*|__)?(.*)$/i.exec(line)
+  if (m === null) return false
+  const body = (m[1] ?? '').trim()
+  if (body === '' || body.split(/\s+/).length > LIGHT_WORDS || MISS_WORDS.test(body)) return false
+  const figs = body.replace(/\b\d+(?:\.\d+){1,3}\b(?!:)/g, ' ').replace(/\b(?:v|0\.)\d+\b/gi, ' ') // drop version strings
+  return !(/\d/.test(figs) && SWAP_WORDS.test(figs))
+}
+// Correction/Clarification lines that still owe the full block (not light); a Clarification that is not light counts as a Correction.
+const owesBlock = (t: string): number => t.split('\n').filter(l => /^[ \t>]*(?:[-*+\u2022][ \t]+)?(?:\*\*|__)?[ \t]*(?:Correction|Clarification)\b[^:\n]{0,30}:/i.test(l) && !lightCorrection(l)).length
 export const correctionWithoutPrevention = (answer: string, prompt = ''): boolean => {
-  const t = stripCode(stripDrafts(answer, prompt)).replace(/"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’/g, ' ')
-  return LABEL_LINE('Correction').test(t) && !LABEL_LINE('Prevention').test(t)
+  const t = stripCode(stripDrafts(answer, prompt)).replace(/"[^"\n]*"|\u201c[^\u201d]*\u201d|\u2018[^\u2019\n]*\u2019/g, ' ')
+  return owesBlock(t) > 0 && !LABEL_LINE('Prevention').test(t)
 }
 // 0.6.15 prevention-line (why): a Prevention:/Correction: line with no line starting "Why you caught it:" / "Why J caught it:". Same exemptions.
 // 0.6.16: the "why J, not Claude, caught it" line is matched by meaning: "Why you caught it", "Why J caught it", "why you, not Claude, ...", "You caught it because".
 const WHY_LINE = /^[ \t]*(?:[-*+•][ \t]+)?(?:\*\*|__)?[ \t]*(?:Why (?:you|J)\b[^\n]{0,30}\bcaught\b|Why (?:you|J),? not Claude|(?:You|J) caught (?:it|this|that) because)/im
 export const preventionWithoutWhy = (answer: string, prompt = ''): boolean => {
   const t = stripCode(stripDrafts(answer, prompt)).replace(/"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’/g, ' ')
-  return (LABEL_LINE('Prevention').test(t) || LABEL_LINE('Correction').test(t)) && !WHY_LINE.test(t)
+  return (LABEL_LINE('Prevention').test(t) || owesBlock(t) > 0) && !WHY_LINE.test(t)
 }
 // 0.6.14 page-cite: "p. 4" / "page 4" on a line that names a file whose name appears in no tool input or message of this turn.
 export const unopenedPageCites = (answer: string, inputs: string, prompt = ''): string[] => {
@@ -1297,7 +1314,7 @@ export const closureMisses = (text: string, f: { changed?: boolean; launch?: boo
   const out: [string, string][] = []
   for (const line of proseLines(text)) {
     const m = p('label').exec(line)
-    if (m === null) continue
+    if (m === null || (lightCorrection(line) && LIGHT_STATUS.test(line) && !/\b(?:parked|proposal|waiting|queued|later|next (?:build|plugin|zip)|handoff|backlog|will|would|could)\b/i.test(line))) continue // 0.6.32 W6: a light Correction that only states what is not yet built/seen names no change to close
     const body = String(m[1] ?? '').replace(/^[\s*_:]+/, '').trim()
     if (body === '' || /^none\b(?!\W*yet\b)/i.test(body) || !(p('change').test(body) || p('hindsight').test(body) || p('defer').test(body) || /\b(?:would|could|might)\b/i.test(body) || /^\W*Leap\b/i.test(line))) continue // hindsight, deferral, conditional and Leap ideas name a change too
     const snip = line.trim().slice(0, 80)
@@ -1427,6 +1444,73 @@ export const claimAhead = (text: string, f: { acts?: Act[]; launch?: boolean; op
   }
   return out
 }
+// W3 (13 Nov; AB-0628 cause W "work named but not done", 27 of 67 failed first drafts): with deep-cap 1 the redraft after a denial passes unjudged, so the
+// denial is the drafter's only feedback. Per undone-work line it now names the exact next action (tool + target from this turn's tool log) and the line
+// ending that closes it under closure-line and claim-ahead once that call has run. Text only: whether a draft is refused is unchanged. Pack check `next-action`.
+export type NextKind = 'claim' | 'hindsight' | 'offer' | 'plan' | 'later' | 'idea' | 'effect'
+export type NextAction = { line: string; kind: NextKind; call: string; close: string }
+const naWhat = (s: string, n = 60): string => s.replace(/\*\*|__|`/g, '').replace(/^[\s>*+•-]+/, '').replace(/"/g, "'").replace(/\s+/g, ' ').trim().slice(0, n)
+const naHead = (t: string): string => t.split(/\s+/)[0] ?? ''
+// The plan/log writes this turn (handoff, open items, board or Scoreboard row): matched by target only, so their hay is the target (see actsOf).
+export const planTargets = (acts: Act[]): string[] => [...new Set(acts.filter(a => a.kind === 'write' && a.tgt !== '' && a.hay.trim() === a.tgt.trim()).map(a => naHead(a.tgt)))].slice(0, 2)
+const realTargets = (acts: Act[]): string[] => [...new Set(acts.filter(a => a.kind === 'write' && a.tgt !== '' && a.hay.trim() !== a.tgt.trim()).map(a => naHead(a.tgt)))].slice(0, 3)
+export const nextAction = (line: string, f: { acts?: Act[]; today?: string; claim?: boolean }): NextAction => {
+  const p = (k: string): RegExp => rx('next-action', k)
+  const acts = f.acts ?? []
+  const l = line.trim()
+  const body = l.replace(/^[\s>*_+•-]*(?:\*\*|__)?\s*[A-Za-z][\w ()'’,-]{0,60}?:(?:\*\*|__)?\s*/, '')
+  const what = naWhat(body)
+  const whole = l.replace(/^[\s>*_+•-]*(?:\*\*|__)?\s*(?:Efficiency|Prevention|Correction|Leap|Status)\b/i, '') // shape words in a label ("Prevention (requested, not built):") count; the label word does not
+  const real = realTargets(acts), plan = planTargets(acts)
+  const launch = acts.find(a => a.kind === 'launch')
+  const write = 'Edit / memory_str_replace / Artifact publish on the file or store that enforces it'
+  const done = (w: string): NextAction => ({ line: l, kind: w as NextKind, call: real.length > 0 ? `name the write that holds it (this turn wrote: ${real.join(', ')}), or make it now: ${write}` : `make it now: ${write}`, close: '— done in <the target written>' })
+  if (f.claim === true) return done('claim')
+  if (p('hindsight').test(whole)) return { line: l, kind: 'hindsight', call: real.length > 0 ? `none, or name the change this turn made (${real.join(', ')})` : 'none', close: 'replace the line with a fact: "the first draft lacked <what>." (or make the change now and end "done in <where>")' }
+  if (p('offer').test(whole)) return { ...done('offer'), close: '— done in <the target written>; only if no tool here reaches it: "— needs J: <the blocker>"' }
+  if (p('plan').test(whole) && !p('later').test(whole.replace(p('plan'), ''))) {
+    if (launch !== undefined) return { line: l, kind: 'plan', call: `none: ${naHead(launch.tgt) || 'a job'} was launched this turn`, close: '— requested; <that job> running' }
+    return { line: l, kind: 'plan', call: `Agent({ run_in_background: true, description: "build: ${naWhat(body, 40)}", prompt: "<the rule, the file that must enforce it, the test>"${plan.length > 0 ? ` (brief: ${plan.join(', ')})` : ''} }), or make it now: ${write}`, close: '— requested; build agent running (launched this turn) | — done in <the target written>' }
+  }
+  if (p('later').test(body) || p('later').test(whole)) {
+    const c = p('clock').exec(whole)
+    let hm = ''
+    if (c !== null) {
+      let h = Number(c[1] ?? c[4]); const m = c[2] ?? c[5] ?? '00'; const ap = String(c[3] ?? '').toLowerCase()
+      if (ap === 'pm' && h < 12) h += 12
+      if (ap === 'am' && h === 12) h = 0
+      if (h <= 23) hm = `${String(h).padStart(2, '0')}:${m}`
+    }
+    const when = hm !== '' ? `at: "${f.today ?? '<YYYY-MM-DD>'}T${hm}:00[Asia/Singapore]"` : `delay_minutes: ${num('next-action', 'delayMin')}`
+    return { line: l, kind: 'later', call: `send_later({ ${when}, message: "${what}" })`, close: `— check-in launched (send_later, ${hm !== '' ? `${hm} SGT` : `${num('next-action', 'delayMin')} min`})` }
+  }
+  if (/^[\s>*_+•-]*(?:\*\*|__)?\s*Leap\b/i.test(l)) return { line: l, kind: 'idea', call: `Agent({ run_in_background: true, description: "build: ${naWhat(body, 40)}", prompt: "<the idea, where it lands, the test>" })`, close: '— build agent running (launched this turn) | — needs J: <why it is J\'s call>' }
+  return { line: l, kind: 'effect', call: 'run the step that shows the effect this turn (test, read, launch), or drop the effect', close: '— <the result that shows it>' }
+}
+// The draft line a snippet or a judge quote names (whitespace and ** ignored).
+const naNorm = (s: string): string => s.replace(/\*\*|__|`/g, '').replace(/[“”]/g, '"').replace(/\s+/g, ' ').trim().toLowerCase()
+export const draftLineFor = (draft: string, frag: string): string | undefined => {
+  const q = naNorm(frag).replace(/[….]+$/, '').slice(0, 40)
+  if (q.length < 8) return undefined
+  return proseLines(draft).find(l => naNorm(l).includes(q))
+}
+// Per problem: the undone lines it names and their next actions. closure-line / claim-ahead carry the line snippet; judge (c)/(e)/(g) quotes it.
+// A judge (c) item that is a lookup left undone is W2's (claimLookups), not a work item.
+export const nextActions = (probs: Problem[], draft: string, f: { acts?: Act[]; today?: string }): NextAction[][] => probs.map(pr => {
+  const jm = /^judge:\s*\(([a-g])\)\s*/i.exec(pr.text)
+  const frags = pr.id === 'closure-line' || pr.id === 'claim-ahead' ? [...pr.text.matchAll(/"([^"]{8,})" \(/g)].map(m => m[1])
+    : pr.id === 'judge' && jm !== null && /^[ceg]$/i.test(jm[1]) && !(jm[1].toLowerCase() === 'c' && rx('next-action', 'lookup').test(pr.text)) ? judgeClaims(pr.text.slice(jm[0].length)).split('\n') : []
+  const seen = new Set<string>()
+  const out: NextAction[] = []
+  for (const fr of frags) {
+    const line = draftLineFor(draft, fr)
+    if (line === undefined || seen.has(line)) continue
+    seen.add(line)
+    out.push(nextAction(line, { ...f, claim: pr.id === 'claim-ahead' }))
+  }
+  return out.slice(0, 3)
+})
+export const nextText = (as: NextAction[]): string => as.length === 0 ? '' : `${msg('next-action', 'head')} ${as.map((a, i) => `${String.fromCharCode(97 + i)}) "${naWhat(a.line, 50)}": ${a.call}; end it "${a.close}"`).join(' ')}`
 // 0.6.25 stop-repeat: draft lines (3+ words, footers aside) whose words are mostly (>= 0.8 of the shorter line) in one line J already saw this turn.
 export const STOP_FEEDBACK = /(?:^|\n)\s*Stop hook feedback\b/
 const FOOTER_LINE = /^[\s>*_-]*(?:\*\*|__)?(?:Efficiency|Leap|Next|checked)\b[^:\n]{0,20}:/i
@@ -1859,9 +1943,9 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.31'
+export const PLUGIN_VERSION = '0.6.32'
 // 0.6.29 version row: this version's CHANGELOG line (tools/build-zip.sh fails unless CHANGELOG.md has "- <PLUGIN_VERSION>: <CHANGELOG_LINE>").
-export const CHANGELOG_LINE = '0.6.30 + 0.6.31 batch: the judge checks only the current ask, earlier asks shown as already answered; missing-lookup denials name the exact lookup per claim type (version, status, figure, time, link), and the hook reads versions, clock and local files itself into the deny text; same drafts still fail first.'
+export const CHANGELOG_LINE = '0.6.30 to 0.6.32 batch: the judge checks only the current ask, earlier asks shown as already answered; missing-lookup denials name the exact lookup per claim type; undone-work denials name the exact call per line (Agent launch, send_later, or the write to make) and the ending that passes; short corrections (25 words or fewer, no miss admitted, no figure swapped) skip the full Prevention/Why block.'
 export const FIX_CATEGORY = 'unchecked reply'
 export const VERSION_ROW_KEY = 'fixesRowVersion' // the last PLUGIN_VERSION whose fixes row was queued
 export const versionRow = (date: string, time: string): { id: string; collection: string; data: Record<string, unknown> } => ({ id: `f-auto-dg${PLUGIN_VERSION.replace(/\./g, '')}`, collection: 'fixes', data: { category: FIX_CATEGORY, date, kind: 'hook', status: 'landed', title: `dispatch-guard ${PLUGIN_VERSION} (auto)`, detail: `dispatch-guard ${PLUGIN_VERSION} first deep turn ${date} ${time} SGT: ${CHANGELOG_LINE}`, plugin_version: PLUGIN_VERSION, auto: true } })
@@ -2409,7 +2493,9 @@ export const register: Register = on => {
         else {
           await recordOutcome($, epoch, [{ id: 'evidence-first', text: msg('evidence-first') }], 'fail', 0).catch(() => undefined)
           // 0.6.28: the footer checks run now too, so the redraft fixes them with the lookup instead of failing a round later. Listed only: this refusal's outcome is unchanged.
-          const ff = deepProblems(text, facts()).filter(p => FOOTER_IDS.has(p.id) && !logOnly(p.id))
+          const ff0 = deepProblems(text, facts()).filter(p => FOOTER_IDS.has(p.id) && !logOnly(p.id))
+          const na0 = nextActions(ff0, text, { acts, today: sgtIso(await nowMs($)).slice(0, 10) }) // W3: the footer list names its next actions too
+          const ff = ff0.map((p, i) => { const a = nextText(na0[i] ?? []); return a === '' ? p : { ...p, text: `${p.text} → ${a}` } })
           // W2: name the lookup per claim type; run the read-only ones here so the redraft needs no extra call. The refusal itself is unchanged.
           const cl = claimLookups(text, 6)
           const lk = cl.length === 0 || /^\W*(?:yes|no|yep|nope|correct|right)\b/im.test(proseLines(text).join('\n')) ? [...cl, { kind: 'answer' as const, claims: [], lookup: msg('evidence-first', 'lk_answer'), targets: [] }] : cl
@@ -2459,7 +2545,10 @@ export const register: Register = on => {
         const per = g.probs.map(p => p.id === 'judge' && /^judge:\s*\(b\)/i.test(p.text) ? claimLookups(judgeClaims(p.text.replace(/^judge:\s*\(b\)\s*/i, '')), 3) : [])
         const rd = per.some(l => l.length > 0) ? await hookLookups($, mode, per.flat()) : new Map<LookupKind, string>()
         if (rd.size > 0) turnResults = `${turnResults} [hook-lookup] ${lookupRead(rd)}`.slice(-6000)
-        const shown = g.probs.map((p, i) => { const l = per[i] ?? []; return l.length === 0 ? p : { ...p, text: `${p.text} → ${lookupText(l, rd, false)}` } })
+        // W3: an undone-work problem (closure-line, claim-ahead, judge (c)/(e)/(g)) names the exact next call and the closing line ending per line. Text only.
+        const today = sgtIso(await nowMs($)).slice(0, 10)
+        const na = nextActions(g.probs, text, { acts, today })
+        const shown = g.probs.map((p, i) => { const l = per[i] ?? []; const a = nextText(na[i] ?? []); const t = l.length === 0 ? p.text : `${p.text} → ${lookupText(l, rd, false)}`; return { ...p, text: a === '' ? t : `${t} → ${a}` } })
         return { result: `Deep mode: fix these, then call check_reply again (${g.denied}/${cap}): ${numbered(shown)}` }
       }
       const holdNote = atCap && jr === undefined && !g.capped ? `Deep mode: sent at the ${cap}-failure cap; the judge was skipped for this draft.` : ''

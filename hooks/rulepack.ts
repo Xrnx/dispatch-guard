@@ -34,6 +34,7 @@ export const RANGES: Record<string, Record<string, [number, number]>> = {
   'evidence-first': { enforce: [0, 2] }, // 0.6.25: 0 off, 1 log-only, 2 live (default)
   'closure-line': { enforce: [0, 2] }, // 0.6.25: 0 off, 1 log-only, 2 live (default)
   'claim-ahead': { enforce: [0, 2] }, // 0.6.28: 0 off, 1 log-only, 2 live (default)
+  'next-action': { delayMin: [1, 1440] }, // W3: send_later delay when an undone "later" line names no clock time
 }
 
 // 0.6.17: the judge's rules, overridable from a pack (deep-judge.messages.rules, JUDGE_RULES_MIN-JUDGE_RULES_MAX chars).
@@ -47,7 +48,7 @@ Flag a problem only when it is clear and matters; when unsure, ok:true. Flag ONL
 (d) the user's question not answered;
 (e) a stated effect, intent, fix, prevention, follow-up or improvement (Correction, Prevention, Efficiency and Leap lines included) not done this turn with evidence showing the change and the step in it that achieves the claim, unless marked needs J (irreversible or J-only); pre-filter lines need that proof;
 (f) a Prevention worded with the incident's tool, file, product or game names instead of a general principle (names only in a trailing "e.g.");
-(g) a Correction missing: why the user, not the assistant, caught it; a fix saved for all future work; a check that fires, when the same rule already missed; similar cases covered.
+(g) a Correction missing: why the user, not the assistant, caught it; a fix saved for all future work; a check that fires, when the same rule already missed; similar cases covered. A Correction: line of 25 words or fewer that only restates its own wording (no wrong fact, no admitted miss) owes none of this.
 Do NOT flag: details merely absent from the evidence summary, paraphrases of material the assistant read, general knowledge, low-stakes details, wording style, or bookkeeping the standing rules require. Footer, sleep, checked:, Correction/Prevention/Why lines are never problems for being unasked; their claims fall under (e)-(g).
 Reply with strict JSON only: {"ok":true|false,"problems":["(a-g) short problem: quote the words, say the fix"]}. At most 3 problems. ok:true means problems is [].`
 
@@ -373,6 +374,22 @@ export const BUNDLED: Record<string, CheckDef> = {
       after: /^\W{0,3}(?:(?:at|on|since)\s+)?\d{1,2}:\d{2}\b|^\s*(?:(?:it|them|this|that)\s+)?back\b|^\s*(?:(?:this|the|my|a|that|its|first|earlier|previous|final)\s+){0,2}(?:draft|answer|reply|version)\b|^\s*(?:you|me|us|J|him|her|them|time|rounds?|tokens?|turns?|minutes?|hours?|steps?|a (?:round|turn|step|call)|total|tally|count|sum|log|list|low|out|costs?|text|state|earlier|previously|before|already|yesterday|last)\b|^\s*(?:\$|~)\s*\d|^\s*\d+(?:\.\d+)?\s*(?:%|x|k|s|min|minutes?|hours?|rounds?|turns?|calls?|tokens?|steps?|messages?)\b/i,
     },
     messages: { line: 'Claim ahead of work: done/built/saved/running/launched/sent with no matching write or launch this turn (running: nor a live job on record). Do it now, or say "requested", "needs J" or "not built".' },
+  },
+  // W3 (13 Nov; AB-0628 cause W, 27 of 67 failed first drafts): a refused draft's undone-work lines (closure-line / claim-ahead misses, lines judge (c)/(e)/(g) quotes)
+  // get the exact next action (tool + target) and the line ending that closes it. Text only: whether a draft is refused is unchanged. Shapes are tried in this order:
+  // `hindsight` (lesson, no change), `offer` (handed to J or "can't edit here"), `plan` (a handoff/note/request standing in for the change), `later` (own future step:
+  // "I'll", "Next: ... when X lands", a clock time), then a Leap idea. `lookup` = a judge (c) item that is a lookup left undone (W2 names that one). `clock` = a time to pass to send_later.
+  'next-action': {
+    numbers: { delayMin: 60 },
+    patterns: {
+      hindsight: /\b(?:would|could|should|might)(?: have|['\u2019]ve)\b|\bwould['\u2019]ve\b/i,
+      offer: /\bpaste (?:this|it|that|the)\b|\bcan['\u2019]?t (?:edit|change|save|write|update)\b|\bcannot (?:edit|change|save|write)\b|\b(?:proposed|suggested) (?:change|edit|fix|rule)\b|\bfor you to\b|\byou (?:can|could|should|may) (?:add|paste|edit|save|change)\b|\bneeds? your (?:claude\.ai )?settings\b/i,
+      plan: /\b(?:handoff|hand-off|open items?|queued|queue|brief|memory note|note written|none (?:yet|durable)|not (?:yet )?(?:built|ported|implemented|live|tested)|once (?:it['\u2019]?s |it is )?(?:built|ported|implemented)|requested|pending|staged|next (?:build|version|release|session|plugin)|later session|untested|intended)\b/i,
+      later: /\b(?:I['\u2019]ll|I will|we['\u2019]ll|will (?:\w+ )?(?:check|send|report|confirm|compare|look|add|run|review|post|share|ping))\b|^\W*(?:\(auto\b|next\b)|\b(?:tomorrow|tonight|later today|later)\b|\bwhen\b[^.;\n]{0,40}\b(?:lands?|done|finish(?:es)?|built|ready|back)\b|\bonce\b[^.;\n]{0,40}\b(?:lands?|done|finish(?:es)?|ready|back)\b|\b(?:around|at|by) \d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b(?:around|at|by) \d{1,2}:\d{2}\b/i,
+      clock: /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b|\b(\d{1,2}):(\d{2})\b/i,
+      lookup: /\b(?:could (?:check|read|look|verify|grep|confirm)|look(?:s|ed)? (?:it |this |that )?up|lookup|unverified|unconfirmed|left unverified|read (?:the|it|its))\b/i,
+    },
+    messages: { head: 'Next action per undone line (make the call, then end the line as shown):' },
   },
   // 0.6.17 deep-cap: failed checks per draft before PASS-with-note (0 = never fail a draft).
   'deep-cap': { numbers: { cap: 1 } },
