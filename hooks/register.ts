@@ -1450,6 +1450,8 @@ export const SEND_ROUTE = false
 export const ROUTE_LINE = `Send every reply to J with SendUserMessage: it runs the same check before J sees it and holds a failing draft (check_reply first is optional and saves a round). After it goes out, end the turn with no text.`
 // 0.6.28: the Stop re-check (once per text): the reply reached J unchecked; check it now and send only a correction.
 export const STOP_RECHECK = `Deep mode: this reply reached J without a check_reply PASS. Call ${CHECK_TOOL} now with this exact reply as text. If it passes, end the turn with no text: J already has it (if the app then asks for visible output, one line of at most 8 words with no claims, e.g. "Nothing to add."; it is not checked again). If it fails, send J only the correction (what was wrong, the fixed line) with SendUserMessage; never repeat the reply.`
+// W24 (0.6.39): a final reply that differs (whitespace-normalised) from every text check_reply passed this turn is blocked with this instead.
+export const STOP_REWORDED = 'Sent text differs from the passed draft. Re-run check_reply on the exact text you sent; from now on the final reply must be the passed text verbatim.'
 // 0.6.29 (J 12:40, repeat loop): the Stop re-check's own exemptions. A short text (under deep-judge minWords, no claim word, not a yes/no
 // answer) is never re-checked, whatever J asked; a re-check that fails only on footer lines is logged, not sent to J; the app's
 // no-visible-output nudge is not a J message (no new epoch, no J turn), so its forced filler is never re-checked.
@@ -2126,9 +2128,9 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.38'
+export const PLUGIN_VERSION = '0.6.39'
 // 0.6.29 version row: this version's CHANGELOG line (tools/build-zip.sh fails unless CHANGELOG.md has "- <PLUGIN_VERSION>: <CHANGELOG_LINE>").
-export const CHANGELOG_LINE = 'Judge catches more of the problems the user catches: comparisons without a fairness check, measures presented as working without a test, guessed causes when data was available, and done-claims not checked as the user sees them (catch on the user cases 0 of 24 to 14 of 24); set_rules accepts a later, longer rules text.'
+export const CHANGELOG_LINE = 'Deep mode: a final reply that differs from the text check_reply passed is blocked at Stop with a short order to re-check the exact sent text and send passed text verbatim; each such send is counted (reworded_sends).'
 export const FIX_CATEGORY = 'unchecked reply'
 export const VERSION_ROW_KEY = 'fixesRowVersion' // the last PLUGIN_VERSION whose fixes row was queued
 export const versionRow = (date: string, time: string): { id: string; collection: string; data: Record<string, unknown> } => ({ id: `f-auto-dg${PLUGIN_VERSION.replace(/\./g, '')}`, collection: 'fixes', data: { category: FIX_CATEGORY, date, kind: 'hook', status: 'landed', title: `dispatch-guard ${PLUGIN_VERSION} (auto)`, detail: `dispatch-guard ${PLUGIN_VERSION} first deep turn ${date} ${time} SGT: ${CHANGELOG_LINE}`, plugin_version: PLUGIN_VERSION, auto: true } })
@@ -2142,8 +2144,8 @@ export async function queueVersionRow($: EngineInterface): Promise<boolean> {
     return true
   } catch { return false }
 }
-type Stats = { date: string; prompts: number; firstPass: number; rounds: number; unchecked: number; uu: number; att?: string; so?: string; jc: number; jok: number; jun: number; tin: number; tout: number; tcache: number; epoch?: string; eRounds: number; eFail: boolean; closed?: string; fc: Record<string, number>; dh: Record<string, number>; ds: Record<string, string[]>; tms: number; tn: number; tmax: number; jms: number; crms: number; fs: number[]; fl: number; frms: number; frn: number; frmax: number; fims: number; cms: number; eT0?: number; eT1?: number; ft?: number[]; ff?: number[]; fck?: number[]; ftr?: string[]; flt?: number; flw?: number; lb?: Record<string, LatB>; pf?: number; sbj?: number }
-export type StatsRow = { source: 'deep-stats'; date: string; session: string; plugin_version: string; prompts_judged: number; first_draft_pass: number; unchecked: number; unchecked_unattended: number; attended: string; session_origin: string; rounds_total: number; judge_calls: number; judge_ok: number; judge_unavailable: number; tokens_in: number; tokens_out: number; tokens_cache: number; fail_checks: Record<string, number>; dark_hits: Record<string, number>; dark_samples: Record<string, string[]>; turn_ms_total: number; turn_count: number; turn_ms_max: number; judge_ms_total: number; checker_rounds_ms_total: number; final_ms_total: number; final_count: number; final_ms_max: number; first_ms_total: number; check_ms_total: number; post_first_ms_total: number; stopped_by_j: number; lat_ack: LatB; lat_question: LatB; lat_task1: LatB; lat_taskN: LatB }
+type Stats = { date: string; prompts: number; firstPass: number; rounds: number; unchecked: number; uu: number; att?: string; so?: string; jc: number; jok: number; jun: number; tin: number; tout: number; tcache: number; epoch?: string; eRounds: number; eFail: boolean; closed?: string; fc: Record<string, number>; dh: Record<string, number>; ds: Record<string, string[]>; tms: number; tn: number; tmax: number; jms: number; crms: number; fs: number[]; fl: number; frms: number; frn: number; frmax: number; fims: number; cms: number; eT0?: number; eT1?: number; ft?: number[]; ff?: number[]; fck?: number[]; ftr?: string[]; flt?: number; flw?: number; lb?: Record<string, LatB>; pf?: number; sbj?: number; rw?: number }
+export type StatsRow = { source: 'deep-stats'; date: string; session: string; plugin_version: string; prompts_judged: number; first_draft_pass: number; unchecked: number; unchecked_unattended: number; attended: string; session_origin: string; rounds_total: number; judge_calls: number; judge_ok: number; judge_unavailable: number; tokens_in: number; tokens_out: number; tokens_cache: number; fail_checks: Record<string, number>; dark_hits: Record<string, number>; dark_samples: Record<string, string[]>; turn_ms_total: number; turn_count: number; turn_ms_max: number; judge_ms_total: number; checker_rounds_ms_total: number; final_ms_total: number; final_count: number; final_ms_max: number; first_ms_total: number; check_ms_total: number; post_first_ms_total: number; stopped_by_j: number; reworded_sends: number; lat_ack: LatB; lat_question: LatB; lat_task1: LatB; lat_taskN: LatB }
 // 0.6.24 speed meter: wall ms turn.start -> turn.complete of deep J-prompt turns (total, count, max), judge call ms, and checker rounds ms (first to last check_reply round end, per prompt; a one-round prompt adds 0). Counts only.
 // 0.6.23: dark-check would-be hits per id (dark_hits) and the last 3 snippets each (dark_samples, whole field <= 3000 chars), so a reviewer can tell real misses from false alarms. Snippets are reply text or the check's own message only.
 export const DARK_SAMPLES_CAP = 3000
@@ -2161,7 +2163,7 @@ const readStats = async ($: EngineInterface, sid: string, date: string): Promise
   const v = await Promise.resolve().then(() => $.store.get(`${STATS_KEY}:${sid}`)).catch(() => undefined) as Partial<Stats> | undefined
   const fresh = v?.date === date
   const n = (x: unknown): number => (fresh ? Number(x) || 0 : 0)
-  return { date, prompts: n(v?.prompts), firstPass: n(v?.firstPass), rounds: n(v?.rounds), unchecked: n(v?.unchecked), uu: n(v?.uu), att: typeof v?.att === 'string' ? v.att : undefined, so: typeof v?.so === 'string' ? v.so : undefined, jc: n(v?.jc), jok: n(v?.jok), jun: n(v?.jun), tin: n(v?.tin), tout: n(v?.tout), tcache: n(v?.tcache), epoch: v?.epoch, eRounds: Number(v?.eRounds) || 0, eFail: v?.eFail === true, closed: v?.closed, tms: n(v?.tms), tn: n(v?.tn), tmax: n(v?.tmax), jms: n(v?.jms), crms: n(v?.crms), fs: fresh && Array.isArray(v?.fs) ? v.fs.map(Number).filter(Number.isFinite).slice(-200) : [], fl: n(v?.fl), frms: n(v?.frms), frn: n(v?.frn), frmax: n(v?.frmax), fims: n(v?.fims), cms: n(v?.cms), sbj: n(v?.sbj), ...latRead(v, fresh), eT0: Number(v?.eT0) || undefined, eT1: Number(v?.eT1) || undefined, fc: fresh && v?.fc && typeof v.fc === 'object' ? Object.fromEntries(Object.entries(v.fc).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {}, dh: fresh && v?.dh && typeof v.dh === 'object' ? Object.fromEntries(Object.entries(v.dh).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {}, ds: fresh && v?.ds && typeof v.ds === 'object' ? Object.fromEntries(Object.entries(v.ds).map(([k, a]) => [k, Array.isArray(a) ? a.map(x => String(x).slice(0, 160)) : []])) : {} }
+  return { date, prompts: n(v?.prompts), firstPass: n(v?.firstPass), rounds: n(v?.rounds), unchecked: n(v?.unchecked), uu: n(v?.uu), att: typeof v?.att === 'string' ? v.att : undefined, so: typeof v?.so === 'string' ? v.so : undefined, jc: n(v?.jc), jok: n(v?.jok), jun: n(v?.jun), tin: n(v?.tin), tout: n(v?.tout), tcache: n(v?.tcache), epoch: v?.epoch, eRounds: Number(v?.eRounds) || 0, eFail: v?.eFail === true, closed: v?.closed, tms: n(v?.tms), tn: n(v?.tn), tmax: n(v?.tmax), jms: n(v?.jms), crms: n(v?.crms), fs: fresh && Array.isArray(v?.fs) ? v.fs.map(Number).filter(Number.isFinite).slice(-200) : [], fl: n(v?.fl), frms: n(v?.frms), frn: n(v?.frn), frmax: n(v?.frmax), fims: n(v?.fims), cms: n(v?.cms), sbj: n(v?.sbj), rw: n(v?.rw), ...latRead(v, fresh), eT0: Number(v?.eT0) || undefined, eT1: Number(v?.eT1) || undefined, fc: fresh && v?.fc && typeof v.fc === 'object' ? Object.fromEntries(Object.entries(v.fc).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {}, dh: fresh && v?.dh && typeof v.dh === 'object' ? Object.fromEntries(Object.entries(v.dh).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {}, ds: fresh && v?.ds && typeof v.ds === 'object' ? Object.fromEntries(Object.entries(v.ds).map(([k, a]) => [k, Array.isArray(a) ? a.map(x => String(x).slice(0, 160)) : []])) : {} }
 }
 // One or more dark would-be hits ({id, snip}); live checks never reach here. Refreshes today's row when it already exists.
 export async function statsDark($: EngineInterface, hits: { id: string; snip?: string }[]): Promise<void> {
@@ -2186,7 +2188,7 @@ async function statsRound($: EngineInterface, epoch: string | number, failed: bo
   await $.store.set(`${STATS_KEY}:${sid}`, { ...st, eT0: same && st.eT0 !== undefined ? st.eT0 : at, eT1: at, rounds: st.rounds + 1, epoch: e, eRounds: (same ? st.eRounds : 0) + 1, eFail: (same && st.eFail) || failed, fc: failed ? ids.reduce((a, id) => ({ ...a, [id]: (a[id] ?? 0) + 1 }), { ...st.fc }) : st.fc })
 }
 export const statsRow = (sid: string, date: string, st: Stats): StatsRow => ({ source: 'deep-stats', date, session: sid, plugin_version: PLUGIN_VERSION, prompts_judged: st.prompts, first_draft_pass: st.firstPass, unchecked: st.unchecked, unchecked_unattended: st.uu ?? 0, attended: st.att ?? '', session_origin: st.so ?? '', rounds_total: st.rounds,
-  judge_calls: st.jc, judge_ok: st.jok, judge_unavailable: st.jun, tokens_in: st.tin, tokens_out: st.tout, tokens_cache: st.tcache, fail_checks: { ...st.fc }, dark_hits: { ...st.dh }, dark_samples: trimSamples(st.ds), turn_ms_total: st.tms, turn_count: st.tn, turn_ms_max: st.tmax, judge_ms_total: st.jms, checker_rounds_ms_total: st.crms, ...finalRow(st), stopped_by_j: st.sbj ?? 0, first_ms_total: st.fims, check_ms_total: st.cms })
+  judge_calls: st.jc, judge_ok: st.jok, judge_unavailable: st.jun, tokens_in: st.tin, tokens_out: st.tout, tokens_cache: st.tcache, fail_checks: { ...st.fc }, dark_hits: { ...st.dh }, dark_samples: trimSamples(st.ds), turn_ms_total: st.tms, turn_count: st.tn, turn_ms_max: st.tmax, judge_ms_total: st.jms, checker_rounds_ms_total: st.crms, ...finalRow(st), stopped_by_j: st.sbj ?? 0, reworded_sends: st.rw ?? 0, first_ms_total: st.fims, check_ms_total: st.cms })
 // 0.6.33 reply latency. final_* (the main metric): per J message (prompt.submit, or the delivery of a mid-turn one), ms until the LAST J-visible message
 // (SendUserMessage that went out, or final text; a Stop re-check correction included) before the next J prompt or the end of the turn chain. The open group
 // (fs = its message arrival times, fl = its last visible message) is added provisionally by finalOf and committed (frms/frn/frmax) when the next J prompt starts.
@@ -2320,10 +2322,11 @@ export async function sessionWho($: EngineInterface): Promise<SessionWho> {
   return { attended, origin, unattended: attended === '0' }
 }
 // 0.6.28: one unchecked reply seen at a Stop (each Stop of a Stop-hook chain, not only the last text turn.complete sees). Does not close the prompt.
-export async function statsUnchecked($: EngineInterface, who?: SessionWho): Promise<void> {
+export async function statsUnchecked($: EngineInterface, who?: SessionWho, reworded = false): Promise<void> {
   try {
     const sid = String(await $.session.id()), date = sgtIso(await nowMs($)).slice(0, 10), st = await readStats($, sid, date)
     if (who?.unattended === true) st.uu += 1; else st.unchecked += 1
+    if (reworded) st.rw = (st.rw ?? 0) + 1 // W24: a final reply that differs from the text check_reply passed this turn
     if (who !== undefined) { st.att = who.attended; st.so = who.origin }
     await $.store.set(`${STATS_KEY}:${sid}`, st)
     await upsertRows($, [{ id: `deepstats-${sid}-${date}`, data: statsRow(sid, date, st) }])
@@ -2679,6 +2682,7 @@ export const register: Register = on => {
   // 0.6.28: every Stop of a deep J turn whose text needs check_reply (not short-exempt) and matched no PASS is counted here, so a reply the Stop
   // hook blocked and the continuation replaced still counts (turn.complete sees only the last text). In an attended session the first such Stop
   // of a text is blocked once with STOP_RECHECK: the model checks the text J already has and sends only a correction, or nothing.
+  // W24 (0.6.39): when check_reply passed another text this turn, the block carries STOP_REWORDED instead and counts reworded_sends.
   on('classic.Stop', async ($, e, next) => {
     const last = String((e as Record<string, unknown>).last_assistant_message ?? '')
     if (last.trim() !== '') replyDelivered(last) // 0.6.30: this text reached J; the asks pending now are answered by it
@@ -2687,8 +2691,9 @@ export const register: Register = on => {
     if (last.trim() !== '' && jTurn && sendOk && !stopShort(last) && (await readMode($, mode)) === 'deep') {
       const h = replyHash(last)
       who ??= await sessionWho($)
-      if (!countedUnchecked.has(h)) { countedUnchecked.add(h); await statsUnchecked($, who) }
-      if (!who.unattended && !stopBlocked.has(h)) { stopBlocked.add(h); return { block: STOP_RECHECK } }
+      const reworded = finalPassed.size > 0
+      if (!countedUnchecked.has(h)) { countedUnchecked.add(h); await statsUnchecked($, who, reworded) }
+      if (!who.unattended && !stopBlocked.has(h)) { stopBlocked.add(h); return { block: reworded ? STOP_REWORDED : STOP_RECHECK } }
     }
     return next(e)
   })
