@@ -2,6 +2,7 @@
 
 One line per version, newest first. Every version bump adds its line here in the same commit. Sources: version comments in hooks/*.ts, README 0.6.x sections, git log. "no record" = no comment, README text or commit names that version.
 
+- 0.6.38: Judge catches more of the problems the user catches: comparisons without a fairness check, measures presented as working without a test, guessed causes when data was available, and done-claims not checked as the user sees them (catch on the user cases 0 of 24 to 14 of 24); set_rules accepts a later, longer rules text.
 - 0.6.37: Answer first (Scoreboard upload hand-off now only on background turns): if a message has no visible reply after 45 s or 4 tool calls, the next non-reply action is blocked until an answer or an on-it line goes out; turns stopped by the user now count in the wait stats (stopped_by_j).
 - 0.6.36: Wait times split by message type (quick reply, question, single task, multi-ask task) set from the user message before any work, with delay added after the first reply, and judge fails counted per rule (a to g).
 - 0.6.35: Scoreboard rows reach the board: the hook may not write there itself, so when rows wait 30 minutes it hands the exact batch to the main chat to send, and records each flush outcome on disk.

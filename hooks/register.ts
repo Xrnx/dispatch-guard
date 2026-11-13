@@ -1858,7 +1858,7 @@ export const CHECK_SPEC = {
 }
 export const SET_SPEC = {
   name: 'set_rules',
-  description: "Once per session, before the first check_reply: pass the user's saved preferences / standing rules text verbatim (max 12000 chars). The pre-send judge then flags clear breaches of them.",
+  description: "Once per session, before the first check_reply: pass the user's saved preferences / standing rules text verbatim (max 12000 chars). The pre-send judge then flags clear breaches of them. A later call replaces the stored text only if longer.",
   inputSchema: { type: 'object', properties: { text: { type: 'string', description: "The user's standing rules text, verbatim." } }, required: ['text'] },
   isDeferred: false,
 }
@@ -2126,9 +2126,9 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.37'
+export const PLUGIN_VERSION = '0.6.38'
 // 0.6.29 version row: this version's CHANGELOG line (tools/build-zip.sh fails unless CHANGELOG.md has "- <PLUGIN_VERSION>: <CHANGELOG_LINE>").
-export const CHANGELOG_LINE = 'Answer first (Scoreboard upload hand-off now only on background turns): if a message has no visible reply after 45 s or 4 tool calls, the next non-reply action is blocked until an answer or an on-it line goes out; turns stopped by the user now count in the wait stats (stopped_by_j).'
+export const CHANGELOG_LINE = 'Judge catches more of the problems the user catches: comparisons without a fairness check, measures presented as working without a test, guessed causes when data was available, and done-claims not checked as the user sees them (catch on the user cases 0 of 24 to 14 of 24); set_rules accepts a later, longer rules text.'
 export const FIX_CATEGORY = 'unchecked reply'
 export const VERSION_ROW_KEY = 'fixesRowVersion' // the last PLUGIN_VERSION whose fixes row was queued
 export const versionRow = (date: string, time: string): { id: string; collection: string; data: Record<string, unknown> } => ({ id: `f-auto-dg${PLUGIN_VERSION.replace(/\./g, '')}`, collection: 'fixes', data: { category: FIX_CATEGORY, date, kind: 'hook', status: 'landed', title: `dispatch-guard ${PLUGIN_VERSION} (auto)`, detail: `dispatch-guard ${PLUGIN_VERSION} first deep turn ${date} ${time} SGT: ${CHANGELOG_LINE}`, plugin_version: PLUGIN_VERSION, auto: true } })
@@ -2774,9 +2774,11 @@ export const register: Register = on => {
       const t = String((e as Record<string, unknown>).text ?? '').slice(0, RULES_MAX)
       if (e.agentId !== undefined || t.trim() === '') return { result: 'set_rules: nothing stored (empty text or a subagent call).' }
       const rk = `${RULES_KEY}:${await $.session.id()}`
-      if (String(await Promise.resolve().then(() => $.store.get(rk)).catch(() => '') ?? '') !== '') return { result: 'set_rules: already set for this session (first call only).' }
+      // W22: a later call replaces the stored text only when it is longer (a fuller copy of the same rules); same-length or shorter calls keep the first.
+      const prev = String(await Promise.resolve().then(() => $.store.get(rk)).catch(() => '') ?? '')
+      if (prev !== '' && t.length <= prev.length) return { result: `set_rules: already set for this session (${prev.length} chars); only a longer text replaces it.` }
       await Promise.resolve().then(() => $.store.set(rk, t)).catch(() => undefined)
-      return { result: `Standing rules stored for this session (${t.length} chars).` }
+      return { result: `Standing rules ${prev !== '' ? 'replaced' : 'stored'} for this session (${t.length} chars).` }
     }
     if (e.tool === CHECK_TOOL) {
       await ensurePack($, budgetMs(next)).catch(() => undefined) // pack values (cap, judge floor, judge rules) apply even when check_reply is the first call
