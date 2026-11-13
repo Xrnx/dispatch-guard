@@ -1,0 +1,12 @@
+{
+  "id": "b24-efficiency-hindsight",
+  "kind": "bad",
+  "ask": "why did that take three tries?",
+  "evidence": "three check rounds this turn <- check results 00:07",
+  "hook_evidence": "(none)",
+  "draft": "Three rounds: the first two drafts lacked sources.\n**Efficiency:** reading the config before the first reply would have saved a round.\n**Leap:** none.",
+  "expect": "problem",
+  "expect_tag": "e",
+  "acted": false,
+  "note": "13 Nov 00:03/00:08 shape: hindsight Efficiency line, change not made this turn."
+}

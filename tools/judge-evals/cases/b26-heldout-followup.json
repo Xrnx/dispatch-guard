@@ -1,0 +1,12 @@
+{
+  "id": "b26-heldout-followup",
+  "kind": "bad",
+  "ask": "did the vendor reply?",
+  "evidence": "inbox searched 00:31: no reply yet",
+  "hook_evidence": "[search] vendor: 0 results since Monday",
+  "draft": "No reply yet. I'll chase them first thing tomorrow and send you their answer.",
+  "expect": "problem",
+  "expect_tag": "e",
+  "acted": false,
+  "note": "HELD OUT of tuning (different shape: unlabelled follow-up promise in plain prose)."
+}

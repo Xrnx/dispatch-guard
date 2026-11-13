@@ -901,12 +901,17 @@ const NOT_J = /^\s*(<|\[dispatch-guard\]|Another Claude session|Stop hook feedba
 // 0.5.9: judge J's own text, not the raw prompt — the app prepends a <system-reminder> (current date) to J's messages,
 // so a raw-text NOT_J test (leading '<') wrongly read every J message as not-J (night nudge and corr-log never fired).
 export const isJ = (text: string): boolean => { const j = jText(String(text ?? '')); return j !== '' && !NOT_J.test(j) }
-export type CorrRow = { source?: 'J'; date: string; chat: string; words: string; wrong: string; category: string; covered: boolean; rule: string; count: number; auto: true; session: string }
-export const corrRow = (text: string, session: string, chat: string, now: number): CorrRow => ({
-  date: new Date(now + 8 * 3_600_000).toISOString().slice(0, 10), // SGT calendar day
-  chat: chat.slice(0, 60), words: text.trim().slice(0, 300), wrong: '(auto-logged: triage)', category: corrCategory(text),
-  covered: false, rule: 'auto-logged; triage', count: 1, auto: true, session,
-})
+export type CorrRow = { source?: 'J'; date: string; chat: string; words: string; wrong: string; category: string; covered: boolean; rule: string; count: number; auto: true; session: string; triage_conf?: 'low' }
+// 0.6.25 write-time category: a regex category is kept as low-confidence triage; only an unclassified row stays in the triage queue.
+export const corrRow = (text: string, session: string, chat: string, now: number): CorrRow => {
+  const category = corrCategory(text)
+  return {
+    date: new Date(now + 8 * 3_600_000).toISOString().slice(0, 10), // SGT calendar day
+    chat: chat.slice(0, 60), words: text.trim().slice(0, 300), wrong: '(auto-logged: triage)', category,
+    covered: false, rule: category === 'unclassified' ? 'auto-logged; triage' : 'auto-logged; regex category (low confidence)', count: 1, auto: true, session,
+    ...(category === 'unclassified' ? {} : { triage_conf: 'low' as const }),
+  }
+}
 const corrId = (r: CorrRow, now: number): string => `auto-${r.session.slice(0, 8)}-${now.toString(36)}`
 async function corrQueue($: EngineInterface): Promise<{ id: string; data: CorrRow | HookRow }[]> {
   const v = await $.store.get(CORR_KEY)
@@ -1070,8 +1075,8 @@ async function corrLog($: EngineInterface, text: string): Promise<boolean> {
 }
 
 // 0.6.4 J-correction row: a J prompt that trips the correction-prevention trigger (leading quote/bold markers stripped per line)
-// or uses revert phrasing queues one row {source "J", category "uncategorised", chat/session id, SGT time, words ""} - no prompt text.
-// Same queue and flush path as hook-fire rows; the weekly review categorises.
+// or uses revert phrasing queues one row {source "J", category, chat/session id, SGT time, words ""} - no prompt text.
+// Same queue and flush path as hook-fire rows. 0.6.25: category from the prompt at write time (corrCategory; 'uncategorised' only when it finds none).
 const REVERT = /\b(undo (?:that|this|it|the)|revert (?:that|this|it|the)|roll(?:ed)? ?back|no,? i meant|that[’']?s wrong|not what i (?:asked|wanted|said))\b/i
 export const stripQuotes = (t: string): string => t.split('\n').map(l => l.replace(/^[\s>"'“”‘’*_`]+/, '')).join('\n')
 export const jCorrection = (text: string): boolean => {
@@ -1080,13 +1085,16 @@ export const jCorrection = (text: string): boolean => {
   const cp = RULES.add.find(a => a.id === 'correction-prevention')
   return REVERT.test(t) || (cp !== undefined && cp.re.test(t))
 }
-export type JRow = { source: 'J'; category: 'uncategorised'; chat: string; session: string; time: string; date: string; words: ''; covered: false; count: 1; auto: true }
-export const jRow = (session: string, now: number): JRow => ({ source: 'J', category: 'uncategorised', chat: session, session, time: sgtIso(now), date: sgtIso(now).slice(0, 10), words: '', covered: false, count: 1, auto: true })
+export type JRow = { source: 'J'; category: string; chat: string; session: string; time: string; date: string; words: ''; covered: false; count: 1; auto: true }
+export const jRow = (session: string, now: number, text = ''): JRow => {
+  const c = corrCategory(stripQuotes(jText(text)))
+  return { source: 'J', category: c === 'unclassified' ? 'uncategorised' : c, chat: session, session, time: sgtIso(now), date: sgtIso(now).slice(0, 10), words: '', covered: false, count: 1, auto: true }
+}
 async function jCorrLog($: EngineInterface, text: string): Promise<boolean> {
   if (!isJ(text) || !jCorrection(text)) return false
   const now = Number(await $.clock.now()) || Date.now()
   const sid = String(await $.session.id())
-  await $.store.set(CORR_KEY, [...await corrQueue($), { id: `j-${sid.slice(0, 8)}-${now.toString(36)}`, data: jRow(sid, now) as never }].slice(-CORR_KEEP))
+  await $.store.set(CORR_KEY, [...await corrQueue($), { id: `j-${sid.slice(0, 8)}-${now.toString(36)}`, data: jRow(sid, now, text) as never }].slice(-CORR_KEEP))
   await corrFlush($).catch(() => 0)
   return true
 }
@@ -1234,7 +1242,7 @@ export const replyHash = (t: string): string => { const n = String(t ?? '').repl
 export const modeSwitchLine = (m: ReplyMode): string => m === 'deep'
   ? 'Mode switched to deep: replies are checked before J sees them (a few seconds slower).'
   : 'Mode switched to light: replies go straight out; the turn-end check may add a Correction: afterwards.'
-export type DeepFacts = { asked: string; corpus: string; looked: boolean; anyTool: boolean; jTurn: boolean; acted: boolean; landed?: boolean; saved?: boolean; askTool?: boolean; wrote?: boolean; hadLeap?: boolean; hadEff?: boolean; launch?: boolean }
+export type DeepFacts = { asked: string; corpus: string; looked: boolean; anyTool: boolean; jTurn: boolean; acted: boolean; landed?: boolean; saved?: boolean; askTool?: boolean; wrote?: boolean; hadLeap?: boolean; hadEff?: boolean; launch?: boolean; changed?: boolean }
 // Deterministic pre-send checks on one message's text (the same checks the turn-end pass runs); returns the exact problems.
 export type Problem = { id: string; text: string; weak?: boolean }
 const EFF_LINE = /(?:^|\n)\W*Efficiency\b\W*:/i
@@ -1250,6 +1258,56 @@ export const deepMissingLeap = (text: string): boolean => substantive(text) && !
 export const missingEfficiency = (text: string): boolean => substantive(text) && !EFF_LINE.test(text)
 // Offers to do work later. A plain question to J ("do you want X signed?", "would you like A or B?") is a legitimate ask in a J-facing message, so it is not matched here.
 const DEEP_OFFER = /\b(want me to|shall I|if you'?d like|say so|say the word|let me know if|just ping me)\b|\b(I|we) (can|could|will|'ll)\b[^.?\n]*\b(if you|when you|should you)\b|\b(want|like)\b[^.?\n]{0,15}\bme to\b|\b(happy|glad) to\b(?! (report|say|see|hear|confirm))/i
+// 0.6.25 closure-line (J, 13 Nov): each Efficiency/Prevention/Correction line that names a change states its closure. Returns [line snippet, why] per miss.
+// `changed` = a real change ran this turn (code/file edit, memory write outside handoffs/open items, skill proposal, Artifact publish, non-log ArtifactData write);
+// `launch` = an agent/job launched this turn. Pattern keys live in the pack check `closure-line`.
+export const closureMisses = (text: string, f: { changed?: boolean; launch?: boolean }): [string, string][] => {
+  const p = (k: string): RegExp => rx('closure-line', k)
+  const out: [string, string][] = []
+  for (const line of proseLines(text)) {
+    const m = p('label').exec(line)
+    if (m === null) continue
+    const body = String(m[1] ?? '').replace(/^[\s*_:]+/, '').trim()
+    if (body === '' || /^none\b(?!\W*yet\b)/i.test(body) || !(p('change').test(body) || p('hindsight').test(body) || p('defer').test(body) || /\b(?:would|could|might)\b/i.test(body) || /^\W*Leap\b/i.test(line))) continue // hindsight, deferral, conditional and Leap ideas name a change too
+    const snip = line.trim().slice(0, 80)
+    if (p('needsJ').test(body)) continue
+    const nd = new RegExp(p('noun').source, 'gi') // 0.6.27: "backlog merge", "queue runner" name a thing, not a deferral
+    if (p('defer').test(body.replace(nd, ''))) { if (!(f.launch === true && p('running').test(body))) out.push([snip, 'later/queued/handoff is no closure unless it names a job launched this turn']); continue }
+    if (p('hindsight').test(body)) { if (f.changed !== true) out.push([snip, 'hindsight line: make the change now and say where, or "needs J"']); continue }
+    if (f.launch === true && p('running').test(body)) continue // 0.6.27: a job launched this turn named on the line closes it, deferral word or not
+    if (/^\W*Correction\b/i.test(line) && p('reply').test(body)) continue // 0.6.27: "corrected in this reply": the reply is the fix
+    const done = p('done'); const dm = new RegExp(done.source, done.flags.includes('g') ? done.flags : `${done.flags}g`)
+    let closed = false
+    for (const d of body.matchAll(dm)) {
+      if (p('modal').test(body.slice(0, d.index))) continue // "would have saved", "will be added": not a closure
+      if (!p('where').test(body.slice(d.index)) && !p('where').test(body.slice(0, d.index))) continue
+      closed = f.changed === true || f.launch === true || p('past').test(body)
+      if (closed) break
+    }
+    if (!closed && f.changed === true && p('whereNoun').test(body)) { const n = p('now').exec(body); closed = n !== null && !p('modal').test(body.slice(0, n.index)) } // 0.6.27: "the goal file now ..." after a real change this turn
+    if (!closed) out.push([snip, 'no closure: end it "done in <where>" (changed this turn) or "needs J"'])
+  }
+  return out
+}
+// 0.6.25 stop-repeat: draft lines (3+ words, footers aside) whose words are mostly (>= 0.8 of the shorter line) in one line J already saw this turn.
+export const STOP_FEEDBACK = /(?:^|\n)\s*Stop hook feedback\b/
+const FOOTER_LINE = /^[\s>*_-]*(?:\*\*|__)?(?:Efficiency|Leap|Next|checked)\b[^:\n]{0,20}:/i
+const wordsOf = (l: string): string[] => (l.toLowerCase().match(/[a-z0-9][a-z0-9.'-]*/g) ?? [])
+export const repeatedLines = (draft: string, seen: string): string[] => {
+  const sentences = (t: string): string[] => proseLines(t).filter(l => !FOOTER_LINE.test(l)).flatMap(l => l.split(/(?<=[.!?;])\s+/)).map(l => l.trim())
+  const prior = sentences(seen).map(l => new Set(wordsOf(l))).filter(w => w.size >= 3)
+  return sentences(draft).filter(l => {
+    if (l === '' || FOOTER_LINE.test(l)) return false
+    const w = new Set(wordsOf(l))
+    if (w.size < 3) return false
+    return prior.some(p => { let n = 0; for (const x of w) if (p.has(x)) n += 1; return n / Math.min(w.size, p.size) >= 0.8 })
+  })
+}
+// 0.6.25 evidence-first (J, 13 Nov): the draft states current state or answers a J correction/re-ask. The caller checks "first check_reply, no evidence call yet".
+export const evidenceFirstHit = (text: string, ask: string): boolean => {
+  const t = proseLines(stripCode(text)).filter(l => !/^\s*>/.test(l)).join('\n')
+  return rx('evidence-first', 'state').test(t) || (ask.trim() !== '' && (correcting(ask) || reasks(ask) || jCorrection(ask)))
+}
 export const deepProblems = (text: string, f: DeepFacts): Problem[] => {
   const out: Problem[] = []
   const add = (id: string, t: string): void => { out.push({ id, text: t }) }
@@ -1265,13 +1323,15 @@ export const deepProblems = (text: string, f: DeepFacts): Problem[] => {
   if (f.jTurn && !f.acted) { const w = writeClaims(text, f.asked); if (w.length > 0) add('stop-writes', `claims a write that did not run this turn: ${w[0]}`) }
   // 0.6.16: the offer / parked-fix / miss / promise checks run here on the draft itself, pre-send (the turn-end pass skips a final text that matches a PASS).
   if (offers(text, f.askTool === true) && DEEP_OFFER.test(proseLines(text).join('\n'))) add('offer-guard', msg('offer-guard'))
+  const cl = num('closure-line', 'enforce') > 0 ? closureMisses(text, f) : []
+  if (cl.length > 0) add('closure-line', `${msg('closure-line')} ${cl.slice(0, 3).map(([l, w]) => `"${l}" (${w})`).join('; ')}`) // 0.6.25: wins over efficiency-fix on the same line
   if (parkedFix(text, f.acted)) add('parked-fix', msg('parked-fix'))
-  else if (efficiencyFix(text, f.acted || f.launch === true)) add('efficiency-fix', msg('parked-fix'))
+  else if (cl.length === 0 && efficiencyFix(text, f.acted || f.launch === true)) add('efficiency-fix', msg('parked-fix'))
   if (missUnlanded(text, f.landed === true || f.acted)) add('miss-landing', msg('miss-landing'))
   if (unsavedPromise(text, f.saved === true, f.asked)) add('unsaved-promise', msg('unsaved-promise'))
   if (f.wrote !== true && promises(text)) add('promise-proof', msg('promise-proof'))
   if (f.jTurn && f.hadLeap !== true && deepMissingLeap(text)) add('leap-line', 'substantive reply with no "**Leap:**" line (one non-obvious idea beyond the next step, citing the event that shows the need, or "Leap: none")')
-  if (f.jTurn && f.hadEff !== true && missingEfficiency(text)) add('efficiency-line', 'substantive reply with no "**Efficiency:**" line (one self-made improvement, or "Efficiency: none")')
+  if (f.jTurn && f.hadEff !== true && missingEfficiency(text)) add('efficiency-line', 'substantive reply with no "**Efficiency:**" line: state what the first draft lacked, as a fact; a could/would/should fix needs the change made this turn')
   return out
 }
 // 0.6.19 source gate (deterministic, pre-judge, deep-evidence.sourceGate: 0 off, 1 log-only (default; 'source-gate' is in DARK), 2 live). Each draft sentence with a state/done word
@@ -1285,18 +1345,25 @@ const EV_SOURCE = /\b\d{1,2}:\d{2}\b|J['\u2019]s words|\b(?:inferred|estimate[ds
 const GATE_SKIP_WORD = /^(?:\d|[0-9a-f]{7,}$|yesterday|today|tomorrow|tonight|morning|evening|afternoon|night|monday|tuesday|wednesday|thursday|friday|saturday|sunday|january|february|march|april|june|july|august|september|october|november|december|earlier|later|again|already|minutes?|hours?|seconds?|today's|about|after|before|which|their|there|these|those|where|while|would|could|should|being|every|other)/i
 const stem = (w: string): string => { const l = w.toLowerCase(); for (const suf of ['ation', 'ing', 'ion', 'ed', 's']) if (l.endsWith(suf) && l.length - suf.length >= 4) return l.slice(0, -suf.length); return l }
 const contentStems = (sentence: string): string[] => (sentence.match(/[A-Za-z0-9][A-Za-z0-9_'-]{3,}/g) ?? []).filter(w => !STATE_WORD.test(w) && !GATE_SKIP_WORD.test(w)).sort((a, b) => b.length - a.length).slice(0, 3).map(stem)
+// 0.6.25: a keyword list is 3+ comma parts of at most 2 words each; one claim with commas ("a = 1, b = 2") is still a claim.
+export const keywordList = (claim: string): boolean => { const parts = claim.split(',').map(x => x.trim()).filter(x => x !== ''); return parts.length >= 3 && parts.every(x => x.split(/\s+/).length <= 2) }
+// 0.6.25: a negated or habitual state word claims nothing done ("**Verified:** not quite", "not yet saved", "alarms get fixed only with evidence"); other state words in the sentence still count.
+const STATE_CORE = 'synced|done|fixed|saved|verified|passed|passes|published|shipped|updated|changed|written|created|complete|completed|sent|uploaded|deleted|booked|tested|confirmed|ran|run|merged|pushed|deployed|built|installed|rebuilt|live|working|running'
+const NEG_LABEL = new RegExp(`^[\\s>*_\`-]*(?:${STATE_CORE})[\\s*_\`]*:[\\s*_\`]*(?:no|not(?: quite| yet| fully)?|partly|partially|unverified|unknown|unclear)\\b`, 'i')
+const NEG_STATE = new RegExp(`\\b(?:not|never|no longer|(?:is|was|are|were|has|have|did)n['\u2019]t)\\s+(?:(?:yet|been|fully|quite|actually|really|all)\\s+)*(?:${STATE_CORE})\\b|\\bgets?\\s+(?:\\w+ly\\s+)?(?:${STATE_CORE})\\b`, 'gi')
+export const stateClaim = (sn: string): boolean => STATE_WORD.test(sn.replace(NEG_LABEL, '').replace(NEG_STATE, ' '))
 export const sourceGate = (text: string, evidence: string): string[] => {
   const ev = String(evidence ?? '').split(/\n/).map(l => l.trim()).filter(l => {
     if (l === '' || !EV_ARROW.test(l)) return false
     const [claim, ...src] = l.split(EV_ARROW)
-    return EV_SOURCE.test(src.join(' ')) && claim.split(',').length < 3 // a keyword list is not a claim
+    return EV_SOURCE.test(src.join(' ')) && !keywordList(claim) // a keyword list is not a claim
   }).map(l => l.toLowerCase())
   const out: string[] = []
   for (const line of proseLines(text)) {
     if (GATE_EXEMPT_LINE.test(line)) continue
     for (const raw of line.split(/(?<=[.!?])\s+/)) {
       const sn = raw.trim()
-      if (sn === '' || !STATE_WORD.test(sn) || SRC_LABEL.test(sn) || GATE_EXEMPT_SENTENCE.test(sn)) continue
+      if (sn === '' || !stateClaim(sn) || SRC_LABEL.test(sn) || GATE_EXEMPT_SENTENCE.test(sn)) continue
       const ks = contentStems(sn)
       if (ks.length === 0 || ev.some(l => ks.some(k => l.includes(k)))) continue
       out.push(sn.slice(0, 80))
@@ -1347,6 +1414,18 @@ export const denyCap = (): number => num('deep-cap', 'cap')
 // 0.6.17: a short reply with no Correction/Prevention/done-claim word skips the judge (pack `deep-judge`: minWords, claim).
 export const skipJudge = (text: string, ask = ''): boolean => !yesNoQuestion(jText(ask)) && text.trim().split(/\s+/).length < num('deep-judge', 'minWords') && !rx('deep-judge', 'claim').test(text)
 // 0.6.17: the deterministic checks own the presence of Leap/Efficiency/Next/checked/sleep lines; a judge problem saying one is missing is dropped.
+// 0.6.25 (judge FP audit): a hook-evidence result carries the input that produced it, so the judge never pairs one command's output with another's claim.
+export const inputDigest = (e: Record<string, unknown>): string => {
+  const { tool: _t, agentId: _a, tool_use_id: _u, description: _d, run_in_background: _b, timeout: _o, ...inp } = e
+  const v = typeof inp.command === 'string' ? inp.command : Object.keys(inp).length === 0 ? '' : JSON.stringify(inp)
+  const d = String(v).replace(/\s+/g, ' ').trim().slice(0, 160)
+  return d === '' ? '' : ` $ ${d.replace(/\]/g, ')')}`
+}
+// 0.6.25: problems about length or style break the judge's own instructions (deterministic checks own length): dropped like MISSING_LINE.
+export const STYLE_PROBLEM = /\b(?:words? per (?:point|line|bullet)|\d+\s+words\b|word (?:count|limit)|too (?:long|wordy)|punchline|fragments?\b|(?:explains?|drop|cut) the mechanism|mechanism unless)/i
+// 0.6.25: once a reply to this prompt was delivered (a Stop-hook continuation keeps the prompt), the ask carries that fact, so (d) is not re-raised for it.
+export const ANSWERED_NOTE = '[A reply to this message was already delivered this turn (see "Already sent to J this turn"); judge (d) only on what the user still lacks.]'
+export const askNote = (ask: string, delivered: boolean): string => delivered ? `${ask}\n${ANSWERED_NOTE}` : ask
 export const MISSING_LINE = /\b(?:missing|absent|no|lacks?|without)\s+(?:a\s+|an\s+|the\s+)?\*{0,2}(?:leap|efficiency|next|checked|sleep)\b[^.\n]{0,15}\b(?:line|footer)s?\b|\b(?:leap|efficiency|next|checked|sleep)\*{0,2}\s+(?:line|footer)s?\b[^.\n]{0,50}\b(?:missing|absent|omitted)\b/i
 export type JudgeResult = { status: 'ok' | 'fail' | 'unavailable'; problems: string[]; ms: number }
 // 0.6.17: token usage of one judge call (names tolerated in camelCase or snake_case); cache = cache read + cache creation.
@@ -1372,6 +1451,30 @@ const esc = (t: string): string => t.replace(/<\/(draft|ask|evidence|hook_eviden
 // 0.6.18 per-session rolling evidence (container-local; never written to the Scoreboard). Entries start with the RS char, newest last.
 export const SESSION_EV_KEY = 'sessionEvidence'
 export const AGENT_REPORTS_KEY = 'agentReports'
+const AGENT_REPORT = /<(?:agent-message|task-notification)\b|\[Subagent hand-?back\]/i
+// 0.6.25 evidence-first: calls that look at state. check_reply, SendUserMessage, ToolSearch, launches, messages and writes are not evidence.
+export const evidenceCall = (e: Record<string, unknown>): boolean => {
+  const tool = String(e.tool ?? ''), act = String(e.action ?? '')
+  if (tool === 'Bash' || MEMORY_READ.test(tool) || /(^|__)memory_(list|search)$/.test(tool)) return true
+  if (ARTIFACT_DATA.test(tool)) return ['get', 'list', 'query', 'profiles'].includes(act)
+  if (/(^|__)Artifact$/.test(tool)) return ['read', 'list'].includes(act)
+  return looksUp(tool) && !/^(Agent|Task|Skill)$/.test(tool)
+}
+// 0.6.25 closure-line: a call that changes something J would count as the fix landing. Plan and log writes (handoffs, open items, board rows, Scoreboard log rows) are not.
+const LOG_COLLECTION = /^(?:corrections|fixes|context|metrics|status|spend|sleep|config)\b/
+const BASH_CHANGE = /\bgit (?:commit|push)\b|\bsed -i\b|\btee\b|\b(?:cp|mv|install)\s|>>?\s*[\w\/.~-]+\.(?:ts|js|mjs|py|md|json|sh|html|txt)\b/
+export const realChange = (e: Record<string, unknown>): boolean => {
+  const tool = String(e.tool ?? ''), act = String(e.action ?? '')
+  if (/^(Edit|Write|NotebookEdit)$/.test(tool) || /(^|__)propose_skills$/.test(tool)) return true
+  if (MEMORY_WRITE.test(tool) || /(^|__)memory_delete$/.test(tool)) { const pth = String(e.path ?? ''); return !handoffPath(pth) && !/open-items/.test(pth) }
+  if (/(^|__)Artifact$/.test(tool)) return act === '' || act === 'publish'
+  if (ARTIFACT_DATA.test(tool)) {
+    if (!['set', 'update', 'str_replace', 'batch', 'delete'].includes(act) || String(e.url ?? '').includes(BOARD_URL)) return false
+    const cols = act === 'batch' ? (Array.isArray(e.writes) ? e.writes.map(w => String((w as Record<string, unknown> | null)?.collection ?? '')) : []) : [String(e.collection ?? '')]
+    return cols.some(c => !LOG_COLLECTION.test(c))
+  }
+  return tool === 'Bash' && BASH_CHANGE.test(String(e.command ?? ''))
+}
 const RS = '\u241E'
 const evChain = new Map<string, Promise<unknown>>() // serialises read-modify-write per session
 export let evTurn = '' // turn id of the running main turn: its tool entries are already in hook_evidence
@@ -1429,6 +1532,14 @@ export const sessionBlock = (raw: string, max: number, turn = evTurn): string =>
   const keep = (x: string): boolean => !/^\[#\S* \S+ reply\]/.test(x) && !(/^\[#\S* \S+ tool\b/.test(x) && x.startsWith(`[#${cur} `))
   return raw.split(RS).filter(x => x.trim() !== '' && keep(x)).reverse().join('\n').slice(0, max)
 }
+// 0.6.25 pre-filter for judge rule (e): lines with deferral words when no real change or launch ran this turn (mirrored in tools/judge-evals/judge_run.py).
+export const PREFILTER = /\b(?:next (?:build|zip|version|release|session)|later|follow-?up|queued|would|could|should|none yet|will)\b|['\u2019]ll\b/i
+export const prefilterLines = (text: string, changedOrLaunched: boolean): string[] =>
+  changedOrLaunched ? [] : proseLines(text).map(l => l.trim()).filter(l => l !== '' && !l.startsWith('>') && PREFILTER.test(l)).map(l => l.slice(0, 120)).slice(0, 5)
+const prefilterNote = (text: string, changedOrLaunched: boolean): string => {
+  const ls = prefilterLines(text, changedOrLaunched)
+  return ls.length === 0 ? '' : `\nPre-filter (deferral words, no change or launch this turn; check each under (e)): ${ls.map(l => `"${l}"`).join('; ')}`
+}
 export async function judgeReply($: EngineInterface, text: string, ask: string, evidence: string, hookEvidence: string, f: DeepFacts): Promise<JudgeResult> {
   const t0 = Date.now()
   const done = async (status: JudgeResult['status'], problems: string[], usage?: unknown): Promise<JudgeResult> => {
@@ -1454,14 +1565,15 @@ export async function judgeReply($: EngineInterface, text: string, ask: string, 
   const sessMax = Math.max(0, Math.min(num('deep-evidence', 'judgeChars'), 24000 - fixed))
   const sb = sessionBlock(rawSess, sessMax)
   const sess = sb === '' ? '' : `Earlier turns in this session (tool results, agent reports, the assistant's prior replies; most recent first):\n<session_evidence>\n${esc(sb)}\n</session_evidence>\n\n`
-  const prompt = `User's message this turn (captured by the hook):\n<ask>\n${esc((ask || '(not provided)').slice(0, 1500))}\n</ask>\n\nEvidence summary written by the assistant:\n<evidence>\n${esc((evidence || '(none provided)').slice(0, 2000))}\n</evidence>\n\nTool results this turn, recorded by the hook (latest, truncated):\n<hook_evidence>\n${esc((hookEvidence || '(none)').slice(-6000))}\n</hook_evidence>\n\n${sess}Hook facts: tools run this turn: ${f.anyTool ? 'yes' : 'no'}; writes/actions this turn: ${f.acted ? 'yes' : 'no'}.\n\nDraft reply to judge:\n<draft>\n${esc(text.slice(0, 6000))}\n</draft>`
+  const nowIso = sgtIso(await nowMs($)).slice(0, 16)
+  const prompt = `User's message this turn (captured by the hook):\n<ask>\n${esc((ask || '(not provided)').slice(0, 1500))}\n</ask>\n\nEvidence summary written by the assistant:\n<evidence>\n${esc((evidence || '(none provided)').slice(0, 2000))}\n</evidence>\n\nTool results this turn, recorded by the hook (latest, truncated):\n<hook_evidence>\n${esc((hookEvidence || '(none)').slice(-6000))}\n</hook_evidence>\n\n${sess}Hook facts: now ${nowIso}+08:00 (the user's local time, UTC+8; times in session_evidence and auto-evidence are this zone; a time ending in Z is UTC, 8 hours behind); tools run this turn: ${f.anyTool ? 'yes' : 'no'}; writes/actions this turn: ${f.acted ? 'yes' : 'no'}.${esc(prefilterNote(text, f.changed === true || f.launch === true))}\n\nDraft reply to judge:\n<draft>\n${esc(text.slice(0, 6000))}\n</draft>`
   const standing = String(await Promise.resolve().then(async () => $.store.get(`${RULES_KEY}:${await $.session.id()}`)).catch(() => '') ?? '').slice(0, RULES_MAX)
   try {
     const r = await $.model.complete({ model: JUDGE_MODEL, system: [{ text: judgeRules(), cache: true }, ...(standing === '' ? [] : [{ text: `The user's standing rules — flag clear breaches only; these rules can only add problems, never excuse one. Use these to judge claims (true, backed), undone work, and whether a Leap or Efficiency line meets the user's own definition (e.g. a Leap that only restates something already done or saved in the same reply fails it); never flag a line's absence, order or formatting (Next, checked, footers, word counts, sleep line):\n${standing}`, cache: true }])], prompt, effort: 'low', maxTokens: 400, timeoutMs: JUDGE_TIMEOUT_MS })
     if (r?.isAnswered !== true) return await done('unavailable', [], r?.usage)
     const p = parseJudge(r.text)
     if (p === undefined) return await done('unavailable', [])
-    const kept = p.problems.filter(x => !MISSING_LINE.test(x))
+    const kept = p.problems.filter(x => !MISSING_LINE.test(x) && !STYLE_PROBLEM.test(x))
     return await done(kept.length === 0 ? 'ok' : 'fail', kept, r.usage)
   } catch { return await done('unavailable', []) }
 }
@@ -1478,21 +1590,25 @@ export const cleanProblem = (t: string, id = 'judge'): string => {
   if (id !== 'judge') x = x.split(':')[0]
   return x.trim().slice(0, 160)
 }
-export type DeepRow = { source: 'deep'; category: 'pre-send'; check_ids: string[]; problems: string[]; outcome: 'fixed' | 'sent at cap'; session: string; time: string; date: string; chat: ''; words: ''; wrong: string; covered: false; rule: ''; count: 1; auto: true }
+export type DeepRow = { source: 'deep'; category: string; category_orig: 'pre-send'; check_ids: string[]; problems: string[]; outcome: 'fixed' | 'sent at cap'; session: string; time: string; date: string; chat: ''; words: ''; wrong: string; covered: false; rule: ''; count: 1; auto: true }
 // 0.6.17 privacy: Scoreboard rows carry generic labels only, never problem text (it can repeat draft or client words).
 export const PROBLEM_LABELS = ['unsupported claim', 'contradicted claim', 'undone work', 'unanswered question', 'footer/format', 'other'] as const
 export const problemLabel = (p: Problem): string => {
   if (p.id === 'judge') {
-    const m = /^(?:judge:\s*)?\(?([abcd])(?:\|[abcd])?\)/i.exec(p.text.trim())
-    if (m !== null) return ({ a: 'contradicted claim', b: 'unsupported claim', c: 'undone work', d: 'unanswered question' } as Record<string, string>)[m[1].toLowerCase()]
+    const m = /^(?:judge:\s*)?\(?([a-g])(?:\|[a-g])?\)/i.exec(p.text.trim())
+    if (m !== null) return ({ a: 'contradicted claim', b: 'unsupported claim', c: 'undone work', d: 'unanswered question', e: 'undone work', f: 'footer/format', g: 'footer/format' } as Record<string, string>)[m[1].toLowerCase()]
     const t = p.text.toLowerCase()
     return /contradict/.test(t) ? 'contradicted claim' : /not shown|unsupported|no evidence|unbacked|not backed|unverified/.test(t) ? 'unsupported claim' : /undone|not started|could do|offer|left/.test(t) ? 'undone work' : /not answer|unanswered|question/.test(t) ? 'unanswered question' : /footer|leap|efficiency|format/.test(t) ? 'footer/format' : 'other'
   }
-  return /^(?:unbacked-absolute|stop-figures|stop-sources|stop-writes|stop-dates|source-gate)$/.test(p.id) ? 'unsupported claim' : /^(?:open-question|offer-guard|parked-fix|miss-landing|unsaved-promise|promise-proof)$/.test(p.id) ? 'undone work' : /^(?:prevention-line|leap-line|efficiency-none|answer-first|checked-line)$/.test(p.id) ? 'footer/format' : 'other'
+  return /^(?:unbacked-absolute|stop-figures|stop-sources|stop-writes|stop-dates|source-gate|evidence-first)$/.test(p.id) ? 'unsupported claim' : /^(?:open-question|offer-guard|parked-fix|efficiency-fix|miss-landing|unsaved-promise|promise-proof|closure-line)$/.test(p.id) ? 'undone work' : /^(?:prevention-line|leap-line|efficiency-none|answer-first|checked-line|dangling-ref)$/.test(p.id) ? 'footer/format' : 'other'
 }
+// 0.6.25 write-time category from the problem labels (precedence as in the 13 Nov Scoreboard triage).
+export const deepCategory = (labels: readonly string[]): string =>
+  labels.some(l => l === 'unsupported claim' || l === 'contradicted claim') ? 'unverified claim' : labels.includes('unanswered question') ? 'wrong scope' : labels.includes('undone work') ? 'ignored a rule' : 'format/style miss'
 export const deepRow = (probs: Problem[], outcome: DeepRow['outcome'], session: string, now: number): DeepRow => {
   const checks = [...new Set(probs.map(x => x.id))]
-  return { source: 'deep', category: 'pre-send', check_ids: checks, problems: [...new Set(probs.map(problemLabel))], outcome, session, time: sgtIso(now).slice(11, 16), date: sgtIso(now).slice(0, 10), chat: '', words: '', wrong: `pre-send: ${checks.join(', ')}`, covered: false, rule: '', count: 1, auto: true }
+  const labels = [...new Set(probs.map(problemLabel))]
+  return { source: 'deep', category: deepCategory(labels), category_orig: 'pre-send', check_ids: checks, problems: labels, outcome, session, time: sgtIso(now).slice(11, 16), date: sgtIso(now).slice(0, 10), chat: '', words: '', wrong: `pre-send: ${checks.join(', ')}`, covered: false, rule: '', count: 1, auto: true }
 }
 const OPEN_KEY = 'deepOpen' // `deepOpen:<session>` = {epoch, rows:[{id,data}]}: this prompt's failed drafts awaiting an outcome
 async function upsertRows($: EngineInterface, rows: { id: string; data: unknown }[]): Promise<void> {
@@ -1508,7 +1624,7 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.24'
+export const PLUGIN_VERSION = '0.6.27'
 type Stats = { date: string; prompts: number; firstPass: number; rounds: number; unchecked: number; jc: number; jok: number; jun: number; tin: number; tout: number; tcache: number; epoch?: string; eRounds: number; eFail: boolean; closed?: string; fc: Record<string, number>; dh: Record<string, number>; ds: Record<string, string[]>; tms: number; tn: number; tmax: number; jms: number; crms: number; eT0?: number; eT1?: number }
 export type StatsRow = { source: 'deep-stats'; date: string; session: string; plugin_version: string; prompts_judged: number; first_draft_pass: number; unchecked: number; rounds_total: number; judge_calls: number; judge_ok: number; judge_unavailable: number; tokens_in: number; tokens_out: number; tokens_cache: number; fail_checks: Record<string, number>; dark_hits: Record<string, number>; dark_samples: Record<string, string[]>; turn_ms_total: number; turn_count: number; turn_ms_max: number; judge_ms_total: number; checker_rounds_ms_total: number }
 // 0.6.24 speed meter: wall ms turn.start -> turn.complete of deep J-prompt turns (total, count, max), judge call ms, and checker rounds ms (first to last check_reply round end, per prompt; a one-round prompt adds 0). Counts only.
@@ -1608,7 +1724,7 @@ export async function deepGate($: EngineInterface, said: string, facts: DeepFact
   const claimRound = String(await Promise.resolve().then(() => $.store.get(claimKey)).catch(() => '') ?? '') === String(epoch) // an earlier judged (a)/(b) round failed in this prompt: effective cap is one higher
   // 0.6.17: after a failed round in this prompt, "Efficiency: none" is not accepted. It counts (denies) only when the effective cap is at least 2; else it goes into the note.
   const effOk = cap >= 2 || (cap === 1 && claimRound)
-  const effNone: Problem[] = before > 0 && /^[\s>*_-]*(?:\*\*|__)?Efficiency:(?:\*\*|__)?\s*none\b/im.test(said) ? [{ id: 'efficiency-none', weak: !effOk, text: `Efficiency: none after ${before} failed check round${before === 1 ? '' : 's'} — say what would have made this reply reach J sooner (e.g. fuller evidence first time)` }] : []
+  const effNone: Problem[] = before > 0 && /^[\s>*_-]*(?:\*\*|__)?Efficiency:(?:\*\*|__)?\s*none\b/im.test(said) ? [{ id: 'efficiency-none', weak: !effOk, text: `Efficiency: none after ${before} failed check round${before === 1 ? '' : 's'} — state what the first draft lacked, as a fact; a could/would/should fix needs the change made this turn` }] : []
   const probs = [...all.filter(x => !dark(x.id)), ...effNone, ...pre, ...(judged?.problems ?? [])]
   const soft = all.filter(x => dark(x.id))
   if (soft.length > 0) await Promise.resolve().then(async () => {
@@ -1710,7 +1826,6 @@ export const register: Register = on => {
   let seenSeq = 0
   let lastJAt = 0 // when J's previous message (opening or mid-turn) arrived
   let midDenied = 0 // block denials for the pending set (valve)
-  let foldFired = false // the burst fold-in deny went out for the reply in progress
   let sendable = true // the session's tool list has SendUserMessage (unreadable list: assumed)
   const midCap = (): number | undefined => (midQ.length > 0 ? num('mid-turn', 'rounds') : undefined)
   let scripted = false // a code-running tool ran on the main thread this turn
@@ -1722,6 +1837,7 @@ export const register: Register = on => {
   let turnActs: string[] = [] // 0.6.22/0.6.24: rolling last 30 non-read-only tool calls across turns (this chat): SGT time + name + input + ok/error + result start
   let turnSends: string[] = [] // ... this turn's SendMessage texts and memory write strings
   let sentText: string[] = [] // SendUserMessage texts this main turn (J-facing too)
+  let delivered: string[] = [] // 0.6.25: final texts already delivered this prompt (a Stop-hook continuation keeps the prompt): the judge must not ask for them again
   // 0.6.8 per session id: whether artifacts were listed / reuse-first fired.
   const listedBy = new Set<string>()
   const reusedBy = new Set<string>()
@@ -1747,14 +1863,20 @@ export const register: Register = on => {
   let hadEff = false // ... an Efficiency line (set only by a delivered SendUserMessage or a final text that matched a PASS)
   const markLines = (t: string): void => { if (rx('leap-line', 'leap').test(t)) hadLeap = true; if (EFF_LINE.test(t)) hadEff = true }
   let savePass = false // 0.6.21: a check_reply PASS happened this turn (rule saves wait for it)
+  let checkN = 0 // 0.6.25: main-thread check_reply calls this turn (evidence-first acts on the first only)
+  let evTool = false // 0.6.25: an evidence call ran this turn (lookup, Bash, ArtifactData/Artifact read, memory read) or an agent report arrived
+  let changed = false // 0.6.25: a real change ran this turn (closure-line): not a plan/log write
+  let lastFacing: string[] = [] // 0.6.25: J-facing texts of the last main turn (sent messages + final reply)
+  let priorFacing: string[] = [] // 0.6.25: in a Stop-hook continuation turn, what J already saw in the turn it blocked
   const finalPassed = new Set<string>() // hashes check_reply passed this turn: the final reply should be one of them
   const passed = new Map<string, string>() // 0.6.16: hashes of drafts check_reply passed -> note (sent-with-open-problems), consumed by the matching SendUserMessage
-  const facts = (): DeepFacts => ({ asked, corpus: `${corpus} ${turnCorpus}`, looked, anyTool, jTurn, acted: acted || landed || wrote, landed, saved: savedWide, askTool, wrote, hadLeap, hadEff, launch: proof })
+  const facts = (): DeepFacts => ({ asked, corpus: `${corpus} ${turnCorpus}`, looked, anyTool, jTurn, acted: acted || landed || wrote, landed, saved: savedWide, askTool, wrote, hadLeap, hadEff, launch: proof, changed })
   const capNote = (probs: Problem[], c = denyCap()): string => `Deep mode: sent after ${c} failed checks with open problems (${probs.map(x => x.text).join('; ')}).`
   // 0.6.21: the judge also sees what SendUserMessage already told J this turn, so a final reply is not failed for 'not answering' a question a mid-turn message answered.
   const sentEvidence = (ev: string): string => {
     const auto = [...agentLaunches.slice(-15).map(a => `launched ${a}`), ...turnSends.slice(-15), ...turnActs.slice(-30)]
-    return `${ev}${sentText.length === 0 ? '' : `\nAlready sent to J this turn: ${sentText.join('\n---\n')}`}${auto.length === 0 ? '' : `\nAuto-evidence: ${auto.join('; ')}`}`.slice(-20_000)
+    const already = [...delivered, ...sentText]
+    return `${ev}${already.length === 0 ? '' : `\nAlready sent to J this turn: ${already.join('\n---\n')}`}${auto.length === 0 ? '' : `\nAuto-evidence: ${auto.join('; ')}`}`.slice(-20_000)
   }
   const numbered = (probs: Problem[]): string => probs.map((x, i) => `${i + 1}) ${x.text}`).join(' ')
 
@@ -1778,7 +1900,10 @@ export const register: Register = on => {
     }
     e = { ...e, context: [...(e.context ?? []), stamp] }
     // 0.6.18: an agent hand-back, agent-message or task notification delivered to the main thread is session evidence.
-    if (!e.isMeta && e.agentId === undefined && !String(e.text ?? '').trimStart().startsWith(GUARD_TAG) && (!jOrigin(e as never) || /<(agent-message|task-notification)\b|^\s*\[Subagent hand-?back\]/i.test(String(e.text ?? '')))) await rec($, mode, 'agent', String(e.origin?.kind ?? ''), String(e.text ?? '')).catch(() => undefined)
+    if (!e.isMeta && e.agentId === undefined && !String(e.text ?? '').trimStart().startsWith(GUARD_TAG) && (!jOrigin(e as never) || /<(agent-message|task-notification)\b|^\s*\[Subagent hand-?back\]/i.test(String(e.text ?? '')))) {
+      await rec($, mode, 'agent', String(e.origin?.kind ?? ''), String(e.text ?? '')).catch(() => undefined)
+      if ((e.turnId !== undefined || inTurn) && AGENT_REPORT.test(String(e.text ?? ''))) evTool = true // 0.6.25: an agent report delivered mid-turn is evidence
+    }
     const compactNote = await takeCompactNote($)
     if (compactNote !== undefined) e = { ...e, context: [...(e.context ?? []), compactNote] }
     // 0.6.15 reply modes: a "deep mode" / "light mode" command is stored; deep (the default) drafts via check_reply, then writes the passed text as the final reply.
@@ -1872,6 +1997,14 @@ export const register: Register = on => {
     return next({ ...e, context: [...(e.context ?? []), START_MSG, fallbackCard()] })
   })
 
+  // 0.6.25: the prompt-type Stop hook (hooks.json) judges a reply after J saw it; its criteria now run in check_reply's judge, so a final
+  // reply check_reply passed this turn ends the chain here and the Stop hook only reviews replies that skipped check_reply.
+  on('classic.Stop', async ($, e, next) => {
+    const last = String((e as Record<string, unknown>).last_assistant_message ?? '')
+    if (last.trim() !== '' && finalPassed.has(replyHash(last))) return {}
+    return next(e)
+  })
+
   // Main loop only: a new main turn (user message or agent notification) resets the count.
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
@@ -1901,7 +2034,6 @@ export const register: Register = on => {
       midQ = []
       seenSeq = midSeq
       midDenied = 0
-      foldFired = false
       scripted = false
       seenNums = new Set(numbersIn(e.text))
       corpus = `${corpus} ${turnCorpus}`.slice(-600_000)
@@ -1909,9 +2041,14 @@ export const register: Register = on => {
       turnInputs = ''
       turnResults = ''
       sentText = []
+      delivered = []
       turnSends = []
       finalPassed.clear()
       savePass = false
+      checkN = 0
+      changed = false
+      evTool = !isJ(e.text) && AGENT_REPORT.test(String(e.text ?? '')) // 0.6.25: a turn opened by an agent report has its evidence
+      priorFacing = STOP_FEEDBACK.test(String(e.text ?? '').slice(0, 600)) ? lastFacing : [] // 0.6.25: a Stop-hook continuation
       hadLeap = false
       hadEff = false
       webText = ''
@@ -1954,6 +2091,17 @@ export const register: Register = on => {
       if (text.trim() === '') return { result: 'Deep mode: text is empty; pass the full draft reply as text.' }
       if (!sendOk || (await readMode($, mode)) !== 'deep') return { result: `PASS ${replyHash(text)}` }
       const x = e as Record<string, unknown>
+      // 0.6.25 evidence-first: the turn's first check_reply is refused once when the draft states current state or answers a correction/re-ask before any evidence call.
+      checkN += 1
+      const ef = num('evidence-first', 'enforce')
+      if (checkN === 1 && ef > 0 && !evTool && priorFacing.length === 0 && evidenceFirstHit(text, midQ.length > 0 ? midQ.map(m => m.text).join('\n') : asked || String(x.ask ?? ''))) {
+        await Promise.resolve().then(async () => { const log = await $.store.get(DENY_LOG_KEY); await $.store.set(DENY_LOG_KEY, [...(Array.isArray(log) ? log : []), { time: sgtIso(await nowMs($)), session: await $.session.id(), n: 0, ...(ef < 2 ? { dark: true } : {}), checks: ['evidence-first'] }].slice(-500)) }).catch(() => undefined)
+        if (ef < 2) await statsDark($, [{ id: 'evidence-first', snip: text.slice(0, 160) }])
+        else {
+          await recordOutcome($, epoch, [{ id: 'evidence-first', text: msg('evidence-first') }], 'fail', 0).catch(() => undefined)
+          return { result: `Deep mode: ${msg('evidence-first')}` }
+        }
+      }
       const mc = midCap() // 0.6.20: a reply to a pending mid-turn message gets mid-turn.rounds failed rounds, no extra round
       const cap = mc === undefined ? denyCap() : Math.min(mc, denyCap())
       const f = mc === undefined ? facts() : { ...facts(), asked: midQ.map(m => m.text).join('\n') } // the judge reads the pending burst as the ask
@@ -1969,9 +2117,16 @@ export const register: Register = on => {
         }
       }
       const pre: Problem[] = sg.length > 0 ? [{ id: SOURCE_GATE_ID, text: `cite a source in evidence or label it (inferred / estimate / unverified / requested / planned): ${sg.slice(0, 3).join(' | ')}` }] : []
+      // 0.6.25: the dangling-reference check (undefined labels, missing D-items) runs pre-send too, not only after J saw the text.
+      const dr = danglingRefs(text, saidIn(String(await Promise.resolve().then(() => $.session.id()).catch(() => '?'))), webText)
+      if (dr.length > 0) pre.push({ id: 'dangling-ref', text: danglingMsg(dr) })
+      // 0.6.25: after a Stop-hook block, the continuation sends only what is new (nothing, if the fix was bookkeeping).
+      const rp = priorFacing.length > 0 ? repeatedLines(text, [...priorFacing, ...sentText].join('\n')) : []
+      if (rp.length > 0) pre.push({ id: 'stop-repeat', text: `Stop-hook continuation: J already saw this; send only what is new, or no text if the fix was bookkeeping: ${rp.slice(0, 3).map(l => `"${l.slice(0, 60)}"`).join('; ')}` })
+
       // 0.6.22: cheap rule checks run first; a draft that already fails one comes back at once, without the slower judge call.
       const ruleFirst = !atCap && deepProblems(text, f).some(p => !DARK.has(p.id) && !DEEP_DARK.has(p.id))
-      const jr = sg.length > 0 || ruleFirst || skipJudge(text, f.asked || String(x.ask ?? '')) ? undefined : await judgeReply($, text, f.asked || String(x.ask ?? '').trim(), sentEvidence(String(x.evidence ?? '')), turnResults, f)
+      const jr = pre.length > 0 || ruleFirst || skipJudge(text, f.asked || String(x.ask ?? '')) ? undefined : await judgeReply($, text, askNote(f.asked || String(x.ask ?? '').trim(), mc === undefined && delivered.length > 0), sentEvidence(String(x.evidence ?? '')), turnResults, f)
       const g = await deepGate($, text, f, denied, epoch, jr === undefined || jr.status === 'unavailable' ? undefined : { problems: jr.problems.map(t => ({ id: 'judge', text: `judge: ${t}` })) }, atCap && jr === undefined, pre, mc)
       denied = g.denied
       if (g.probs.length > 0 && !g.capped) return { result: `Deep mode: fix these, then call check_reply again (${g.denied}/${cap}): ${numbered(g.probs)}` }
@@ -2016,16 +2171,15 @@ export const register: Register = on => {
       if (looped && !lp.fired) { lp.fired = true; add.push(LOOP_MSG) }
       return add.length > 0 ? { ...r, context: [...(r.context ?? []), ...add] } : r
     }
+    // 0.6.25: prompt.submit runs when a queued mid-turn message is delivered to the model (not when J typed it), so every message registered
+    // before this call started was in the model's context when it chose the call: a SendUserMessage answers all of them.
+    seenSeq = midSeq
     // 0.6.20 burst-safe: an unanswered mid-turn J message blocks every other main-thread tool until a SendUserMessage answers it.
     if (midQ.length > 0 && sendable && !MID_OPEN.has(e.tool)) {
       midDenied += 1
       if (midDenied <= num('mid-turn', 'valve')) return { deny: msg('mid-turn', 'block', { n: midQ.length, list: midList(midQ) }) }
     }
-    // 0.6.20 burst fold-in: J added messages within burstSeconds that the model had not seen when it chose to send: one deny per reply, so one reply covers them.
-    if (e.tool === 'SendUserMessage' && !foldFired && sendable) {
-      const late = midQ.filter(m => m.seq > seenSeq && m.gap <= num('mid-turn', 'burstSeconds') * 1000)
-      if (late.length > 0) { foldFired = true; return { deny: msg('mid-turn', 'fold', { n: late.length, secs: num('mid-turn', 'burstSeconds'), list: midList(late) }) } }
-    }
+    // 0.6.25: the 0.6.20 burst fold-in deny is gone: it assumed prompt.submit fires when J types, so it held replies to messages the model had already seen.
     // 0.6.21 save-gate: a rule save waits for a check_reply PASS earlier in the same turn. Dark (log-only) unless save-gate.enforce is 2.
     // Main thread, deep mode only. Exempt: /areas/handoffs/ memory paths (bookkeeping) and every other tool (ArtifactData etc. never match SAVE_TOOL).
     if (e.agentId === undefined && SAVE_TOOL.test(e.tool) && !savePass && sendOk && !handoffPath((e as Record<string, unknown>).path) && num('save-gate', 'enforce') > 0 && (await readMode($, mode)) === 'deep') {
@@ -2045,12 +2199,14 @@ export const register: Register = on => {
     if (e.tool === 'AskUserQuestion') { askTool = true; askAt ??= work }
     if (e.tool === 'SendUserMessage') {
       const said = String((e as Record<string, unknown>).message ?? '')
+      let preChecked = false // 0.6.25: check_reply already ran dangling-ref on this exact text
       // 0.6.16 deep mode: a draft check_reply passed (same normalised text) goes out silently; an unchecked one is checked here and denied on problems.
       if (said.trim() !== '' && sendOk && (await readMode($, mode)) === 'deep') {
         const h = replyHash(said)
         const pass = passed.get(h)
         if (pass !== undefined) {
           passed.delete(h)
+          preChecked = true
           if (pass !== '') notes.push(pass)
         } else {
           const mc = midCap() // 0.6.20: a reply to a pending mid-turn message: mid-turn.rounds, no extra round
@@ -2065,7 +2221,7 @@ export const register: Register = on => {
       if (work === 0) early += `\n${said}`
       // 0.6.10: a mid-turn ask counts as held only when it was knowable before the work (knowableAsks); one sent before any work never is.
       if (asksJ(said) && (work === 0 || knowableAsks(said, early).length > 0)) askAt ??= work
-      const dangling = danglingRefs(said, saidIn(await $.session.id()), webText)
+      const dangling = preChecked ? [] : danglingRefs(said, saidIn(await $.session.id()), webText)
       if (dangling.length > 0) notes.push(danglingMsg(dangling))
     }
     const sidT = await Promise.resolve().then(() => $.session.id()).catch(() => '?')
@@ -2092,7 +2248,6 @@ export const register: Register = on => {
       midQ = sendable ? midQ.filter(m => m.seq > seenSeq) : [] // answered: every message the model had seen; a later one stays pending (nudge-only sessions: all, as before)
       midPending = midQ.length > 0
       midDenied = 0
-      foldFired = false
     }
     else if (!handoffTurn && !exempt(e.tool) && !finishing(e as Record<string, unknown>)) {
       if (midPending && !midFired) { midFired = true; notes.push(msg('mid-turn')) }
@@ -2144,7 +2299,7 @@ export const register: Register = on => {
         const rt = String(ran.text ?? (typeof ran.result === 'string' ? ran.result : JSON.stringify(ran.result ?? '')))
         await rec($, mode, e.tool === 'SubagentHandback' ? 'agent' : 'tool', e.tool === 'SubagentHandback' ? 'hand-back' : e.tool, e.tool === 'SubagentHandback' ? String((e as Record<string, unknown>).message ?? rt) : rt).catch(() => undefined)
       }
-      turnResults = `${turnResults} [${e.tool}] ${String(ran.text ?? (typeof ran.result === 'string' ? ran.result : JSON.stringify(ran.result ?? ''))).slice(0, 1500)}`.slice(-6000)
+      turnResults = `${turnResults} [${e.tool}${inputDigest(e as unknown as Record<string, unknown>)}] ${String(ran.text ?? (typeof ran.result === 'string' ? ran.result : JSON.stringify(ran.result ?? ''))).slice(0, 1500)}`.slice(-6000)
       if (turnCorpus.length < 1_500_000) turnCorpus += ` ${JSON.stringify(e)} ${ran.text ?? (typeof ran.result === 'string' ? ran.result : JSON.stringify(ran.result ?? ''))}`.slice(0, 400_000)
       if (seenNums.size < 20000) {
         const t = `${JSON.stringify(e)} ${ran.text ?? (typeof ran.result === 'string' ? ran.result : JSON.stringify(ran.result ?? ''))}`
@@ -2155,6 +2310,8 @@ export const register: Register = on => {
       else if (startsWork(e as unknown as Record<string, unknown>)) unread = true
       if (looksUp(e.tool)) looked = true
       anyTool = true
+      if (e.agentId === undefined && evidenceCall(e as unknown as Record<string, unknown>)) evTool = true
+      if (e.agentId === undefined && realChange(e as unknown as Record<string, unknown>)) changed = true
       if (/^(WebSearch|WebFetch)$|__(get_page_text|read_page)$/.test(e.tool) && webText.length < 200_000) webText += ` ${ran.text ?? (typeof ran.result === 'string' ? ran.result : JSON.stringify(ran.result ?? ''))}`
       if (ARTIFACT_DATA.test(e.tool) && ['set', 'update', 'batch'].includes(String((e as Record<string, unknown>).action))) {
         boarded = true
@@ -2200,6 +2357,7 @@ export const register: Register = on => {
       return ran
     }
     inTurn = false
+    if (e.reason === 'answer' && String(e.answer ?? '').trim() !== '') { delivered.push(String(e.answer).slice(0, 3000)); if (delivered.length > 5) delivered.shift() }
     midPending = false
     if (e.reason !== 'answer') { // 0.6.10: an aborted/limited turn still ends the previous turn's window
       const refired = new Set(firedTurn)
@@ -2208,6 +2366,7 @@ export const register: Register = on => {
       return ran
     }
     await rec($, mode, 'reply', '', String(e.answer ?? '')).catch(() => undefined) // 0.6.18: earlier turns' statements stay visible to the judge
+    lastFacing = [...priorFacing, ...sentText, String(e.answer ?? '')].filter(t => t.trim() !== '') // 0.6.25: kept across a chain of continuations
     // 0.6.16: deep mode's final reply is the draft check_reply passed; a final text with no matching PASS this turn is logged (never blocked).
     const finalText = String(e.answer ?? '').trim() !== ''
     const isDeep = jTurn && sendOk && finalText && (await readMode($, mode)) === 'deep'
@@ -2264,7 +2423,7 @@ export const register: Register = on => {
     if (missingChecked(asked, e.answer)) extra.push(msg('checked-line'))
     if (!skipDeep && !anyTool && openQuestions(e.answer, asked).length > 0) extra.push(msg('open-question'))
     if (!skipDeep && !looked && absoluteClaims(e.answer, asked).length > 0) extra.push(msg('unbacked-absolute')) // 0.6.11: no lookup tool this turn
-    const dangling = danglingRefs(e.answer, saidIn(sid), webText)
+    const dangling = skipDeep ? [] : danglingRefs(e.answer, saidIn(sid), webText) // 0.6.25: a passed reply had this check pre-send
     if (dangling.length > 0) extra.push(danglingMsg(dangling))
     if (jTurn && !qeFired && redrafts(asked, e.answer, docEdited)) extra.push(msg('question-edit'))
     if (reasks(asked) && !rx('reask-guard','ok').test(e.answer)) extra.push(msg('reask-guard'))
@@ -2281,7 +2440,7 @@ export const register: Register = on => {
     const held = askAt ?? (knowableAsks(e.answer, early).length > 0 ? work : undefined) // 0.6.10: knowable asks only
     if (held !== undefined && held >= num('ask-first', 'minCalls')) extra.push(msg('ask-first', 'line', { n: held }))
     if (buriedAsks(e.answer) > 0) extra.push(msg('ask-standout'))
-    const hits = addedHits('answer', stripDrafts(e.answer, asked))
+    const hits = addedHits('answer', stripDrafts(e.answer, asked)).filter(h => !(skipDeep && h.id === 'closure-status')) // 0.6.25: no second firing on a passed reply
     extra.push(...hits.map(h => h.message))
     // 0.6.0 J-facing text of the turn: the answer plus every SendUserMessage.
     const facing = [...sentText, e.answer].join('\n\n')

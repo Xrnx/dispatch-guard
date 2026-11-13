@@ -1,0 +1,11 @@
+{
+ "id": "n19-item-paraphrase",
+ "kind": "benign",
+ "ask": "Why did you get the version wrong?",
+ "evidence": "open-items line 'next dispatch-guard batch: promote dark checks ...; tune JUDGE_RULES ..., incl. flagging inferred on a checkable fact' extended <- memory_str_replace 00:03.",
+ "hook_evidence": "[memory_str_replace $ {\"path\":\"/areas/open-items.md\"}] Updated.",
+ "draft": "I guessed from a hook firing instead of reading the version file. Prevention: added to the open dispatch-guard item: flag 'inferred' on any fact a tool could check that turn.",
+ "expect": "ok",
+ "acted": true,
+ "note": "Real FP 13 Nov 00:03: a correct short name for the item flagged as (a)."
+}

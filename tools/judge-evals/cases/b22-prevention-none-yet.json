@@ -1,0 +1,12 @@
+{
+  "id": "b22-prevention-none-yet",
+  "kind": "bad",
+  "ask": "why did you say version 2.1?",
+  "evidence": "live version 2.4 <- file read 00:02",
+  "hook_evidence": "[Bash] version: 2.4",
+  "draft": "Live is 2.4; I guessed 2.1.\nCorrection: I answered from memory instead of reading the version file.\nWhy you caught it: I did not check before replying.\nPrevention: none yet.",
+  "expect": "problem",
+  "expect_tag": "e",
+  "acted": false,
+  "note": "13 Nov 00:03 shape: Prevention deferred (\"none yet\") with nothing done."
+}

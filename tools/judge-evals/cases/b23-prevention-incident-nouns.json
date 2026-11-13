@@ -1,0 +1,12 @@
+{
+  "id": "b23-prevention-incident-nouns",
+  "kind": "bad",
+  "ask": "you said the deploy worked but it failed",
+  "evidence": "rule saved <- memory write 00:25",
+  "hook_evidence": "[memory_str_replace] standing rules file new_str: 'The deploy-watch hook in register.ts must read build.log before saying the Project X deploy succeeded.'",
+  "draft": "Correction: I said the deploy succeeded without reading the log.\nWhy you caught it: I skipped the log read.\nPrevention: saved: the deploy-watch hook in register.ts must read build.log before saying the Project X deploy succeeded.",
+  "expect": "problem",
+  "expect_tag": "f",
+  "acted": true,
+  "note": "13 Nov 00:25 shape: a Prevention worded with incident nouns (hook, file, project) instead of a principle."
+}

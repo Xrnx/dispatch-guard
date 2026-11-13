@@ -1,0 +1,10 @@
+{
+ "id": "n21-delivered-answer",
+ "kind": "benign",
+ "ask": "we done with all improvement workstreams?\n[A reply to this message was already delivered this turn (see \"Already sent to J this turn\"); judge (d) only on what the user still lacks.]",
+ "evidence": "this chat built 0.6.8-0.6.10 <- agent reports 8 Nov.\nAlready sent to J this turn: Not quite. Two items are still open: the Riven Market re-sync and the findings merge; the rest need you.",
+ "hook_evidence": "(none)",
+ "draft": "Right, that Efficiency line was hindsight, not a change I'd made. And yes, this chat built dispatch-guard 0.6.8 to 0.6.10.",
+ "expect": "ok",
+ "note": "Real FP 10 Nov 21:42: (d) re-asked an earlier question whose answer was already delivered (fix: delivered final text is listed as already sent)."
+}

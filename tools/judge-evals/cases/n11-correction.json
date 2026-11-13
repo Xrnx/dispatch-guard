@@ -2,10 +2,10 @@
   "id": "n11-correction",
   "kind": "benign",
   "ask": "why did the summary say 5 parties?",
-  "evidence": "Re-read the source: it lists 4 parties. Summary drafted earlier said 5.",
-  "hook_evidence": "[Read] source: Parties (1) to (4)",
-  "draft": "Correction: the source lists 4 parties, not 5; the earlier summary was wrong.\nPrevention: count items from the source list before writing a number.\nWhy you caught it: I did not re-read the list after drafting.",
+  "evidence": "Re-read the source: it lists 4 parties. Summary drafted earlier said 5. Prevention rule saved <- memory write 00:11.",
+  "hook_evidence": "[Read] source: Parties (1) to (4)\n[memory_str_replace] standing rules new_str: 'Count items from the source list before writing a number.'",
+  "draft": "Correction: the source lists 4 parties, not 5; the earlier summary was wrong.\nPrevention: saved to standing rules: count items from the source list before writing a number.\nWhy you caught it: I did not re-read the list after drafting.",
   "expect": "ok",
-  "acted": false,
-  "note": "Correction/Prevention/Why lines required by standing rules. (Removed a 'Fixed' claim that had no write behind it, after first run flagged it.)"
+  "acted": true,
+  "note": "Correction/Prevention/Why lines required by standing rules. (Removed a 'Fixed' claim that had no write behind it, after first run flagged it.) 0.6.25: under judge rule (e) a Prevention must be done this turn, so the case now saves it (memory write in hook evidence)."
 }

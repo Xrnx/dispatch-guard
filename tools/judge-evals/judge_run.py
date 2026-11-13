@@ -5,6 +5,20 @@ from concurrent.futures import ThreadPoolExecutor
 HERE=os.path.dirname(os.path.abspath(__file__))
 MODEL='haiku'
 def esc(t): return re.sub(r'</(draft|ask|evidence|hook_evidence)>',lambda m:'<\\/'+m.group(1),t,flags=re.I)
+# 0.6.25: mirrors PREFILTER / prefilterLines in register.ts (deferral words on lines when no change or launch ran this turn).
+PREFILTER=re.compile(r"\b(?:next (?:build|zip|version|release|session)|later|follow-?up|queued|would|could|should|none yet|will)\b|['\u2019]ll\b",re.I)
+def prose_lines(t):
+    out=[];fenced=False
+    for raw in t.split('\n'):
+        if re.match(r'^\s*(```|~~~)',raw): fenced=not fenced; continue
+        if not fenced: out.append(raw)
+    return out
+def prefilter_note(draft,changed):
+    if changed: return ''
+    ls=[l.strip()[:120] for l in prose_lines(draft) if l.strip() and not l.strip().startswith('>') and PREFILTER.search(l)][:5]
+    return '' if not ls else '\nPre-filter (deferral words, no change or launch this turn; check each under (e)): '+'; '.join(f'"{l}"' for l in ls)
+def now_part(c):  # 0.6.25: mirrors the clock/zone clause judgeReply adds to the hook facts; cases without "now" keep the old layout
+    return f"now {c['now']}+08:00 (the user's local time, UTC+8; times in session_evidence and auto-evidence are this zone; a time ending in Z is UTC, 8 hours behind); " if c.get('now') else ''
 def build_prompt(c):
     he=c.get('hook_evidence') or '(none)'
     tools='no' if he.strip() in ('(none)','') else 'yes'
@@ -12,7 +26,7 @@ def build_prompt(c):
     return (f"User's message this turn (captured by the hook):\n<ask>\n{esc((c['ask'] or '(not provided)')[:1500])}\n</ask>\n\n"
       f"Evidence summary written by the assistant:\n<evidence>\n{esc((c['evidence'] or '(none provided)')[:2000])}\n</evidence>\n\n"
       f"Tool results this turn, recorded by the hook (latest, truncated):\n<hook_evidence>\n{esc(he[-6000:])}\n</hook_evidence>\n\n"
-      f"Hook facts: tools run this turn: {tools}; writes/actions this turn: {acted}.\n\n"
+      f"Hook facts: {now_part(c)}tools run this turn: {tools}; writes/actions this turn: {acted}.{esc(prefilter_note(c['draft'],bool(c.get('acted')) or bool(c.get('launch'))))}\n\n"
       f"Draft reply to judge:\n<draft>\n{esc(c['draft'][:6000])}\n</draft>")
 def parse(text):  # mirrors parseJudge in register.ts
     m=re.search(r'\{[\s\S]*\}',text or '')
@@ -39,7 +53,7 @@ def call(rules,c,rep):
     r={'verdict':v,'ms':ms,'raw':out[:500]}
     if v is not None: json.dump(r,open(cp,'w'))   # only cache parsed answers
     r['cached']=False; return r
-def tags(v): return [m.group(1).lower() for p in v['problems'] for m in [re.match(r'^\s*\(?([abcd])\)',p,re.I)] if m]
+def tags(v): return [m.group(1).lower() for p in v['problems'] for m in [re.match(r'^\s*\(?([a-f])\)',p,re.I)] if m]
 def run(rules_file,reps,tag=''):
     rules=open(rules_file).read().strip()
     cases=[json.load(open(f)) for f in sorted(glob.glob(os.path.join(HERE,'cases','*.json')))]

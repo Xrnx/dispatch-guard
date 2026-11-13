@@ -1,0 +1,10 @@
+{
+ "id": "n20-user-stated-fact",
+ "kind": "benign",
+ "ask": "Are you sure older copies are installed? Each time I upload a plugin it overrides the old one.",
+ "evidence": "all three plugin folders' meta.json show the same server_plugin_id <- Bash 00:03.",
+ "hook_evidence": "[Bash $ cat */meta.json] {\"server_plugin_id\":\"plugin_X\"} {\"server_plugin_id\":\"plugin_X\"} {\"server_plugin_id\":\"plugin_X\"}",
+ "draft": "No, I was wrong. As you say, each upload replaces the old one: all three folders carry the same plugin ID, so the older folders are leftover local copies (inferred).",
+ "expect": "ok",
+ "note": "Real FP 13 Nov 00:04: the user's own statement was not counted as a source."
+}

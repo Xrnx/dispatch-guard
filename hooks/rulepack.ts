@@ -31,6 +31,8 @@ export const RANGES: Record<string, Record<string, [number, number]>> = {
   'save-gate': { enforce: [0, 2] }, // 0.6.21: 0 off, 1 log-only (default), 2 live: rule saves and unchecked replies
   'mid-turn': { burstSeconds: [0, 60], rounds: [0, 3], valve: [1, 50] }, // 0.6.20: burst window, failed check rounds for a mid-turn reply, block valve
   'deep-evidence': { sessionChars: [0, 40000], judgeChars: [0, 20000], factsChars: [0, 2000], sourceGate: [0, 2] }, // 0.6.18: rolling per-session evidence store size; share shown to the judge
+  'evidence-first': { enforce: [0, 2] }, // 0.6.25: 0 off, 1 log-only, 2 live (default)
+  'closure-line': { enforce: [0, 2] }, // 0.6.25: 0 off, 1 log-only, 2 live (default)
 }
 
 // 0.6.17: the judge's rules, overridable from a pack (deep-judge.messages.rules, JUDGE_RULES_MIN-JUDGE_RULES_MAX chars).
@@ -40,10 +42,13 @@ export const JUDGE_RULES = `You judge one assistant draft reply before the user 
 Flag a problem only when it is clear and matters; when unsure, ok:true. Flag ONLY:
 (a) a claim that the evidence or the user's message contradicts;
 (b) a claim that work is done, verified, fixed, saved or working, with nothing in the evidence or hook evidence supporting it;
-(c) work left undone or offered that the assistant could do itself (an offer of later work, a fix described but not started, a question it could check); questions only the user can decide are fine;
-(d) the user's question not answered.
-Do NOT flag: details merely absent from the evidence summary, paraphrases of material the assistant read, general knowledge, low-stakes or obvious details, wording style, or bookkeeping the assistant's standing rules require (logs, notes). Lines the user's standing rules require (Efficiency/Leap footers, a closing sleep line, checked: lines, Correction/Prevention/Why lines) are never problems for being unasked or unsupported.
-Reply with strict JSON only: {"ok":true|false,"problems":["(a|b|c|d) short problem: quote the words, say the fix"]}. At most 3 problems. ok:true means problems is [].`
+(c) work the assistant could do itself left undone or offered: an offer ("want me to", "I can"), a fix or next step described instead of done, a claim called unchecked or uncertain that it could look up, a question it could check; the user's own decisions, irreversible steps and work reported as running are fine;
+(d) the user's question not answered;
+(e) a stated effect, intent, fix, prevention, follow-up or improvement (Correction, Prevention, Efficiency and Leap lines included) not done this turn with evidence showing the change and the step in it that achieves the claim, unless marked needs J (irreversible or J-only); pre-filter lines need that proof;
+(f) a Prevention worded with the incident's tool, file, product or game names instead of a general principle (names only in a trailing "e.g.");
+(g) a Correction missing: why the user, not the assistant, caught it; a fix saved for all future work; a check that fires, when the same rule already missed; similar cases covered.
+Do NOT flag: details merely absent from the evidence summary, paraphrases of material the assistant read, general knowledge, low-stakes details, wording style, or bookkeeping the standing rules require. Footer, sleep, checked:, Correction/Prevention/Why lines are never problems for being unasked; their claims fall under (e)-(g).
+Reply with strict JSON only: {"ok":true|false,"problems":["(a-g) short problem: quote the words, say the fix"]}. At most 3 problems. ok:true means problems is [].`
 
 export const BUNDLED: Record<string, CheckDef> = {
   'running-proof': {
@@ -292,6 +297,38 @@ export const BUNDLED: Record<string, CheckDef> = {
   'save-gate': { numbers: { enforce: 1 }, messages: {
     line: 'Run check_reply (evidence incl. each rule-writing gate step\'s result) before saving a rule.',
     miss: 'Final reply was not passed by check_reply: add one short addendum with any claim the check would have flagged; no redo.' } },
+  // 0.6.25 evidence-first (J, 13 Nov): the first check_reply of a turn is refused when the draft states current state (`state`) or answers a J correction/re-ask
+  // and no evidence call ran yet this turn (lookups, Bash, ArtifactData/Artifact reads, memory reads; not check_reply, SendUserMessage, ToolSearch, launches or writes).
+  'evidence-first': {
+    numbers: { enforce: 2 },
+    patterns: { state: /\bv?\d+\.\d+\.\d+\b|\b(?:installed|uninstalled|loaded|synced|enabled|disabled|deployed|uploaded|in stock|out of stock|still (?:running|open|pending|there)|(?:is|are|was|were|it's|we're|you're) (?:live|on|running|active|available|current|latest|up to date))\b|^\W*(?:yes|no|yep|nope|correct|right)\b/im },
+    messages: { line: 'Evidence first: this draft states current state or answers a correction, and no lookup ran yet this turn. Run the check (read, Bash, ArtifactData get, memory_read), then redraft from its result.' },
+  },
+  // 0.6.25 closure-line (J, 13 Nov; the deterministic pre-filter of the 00:27 "nothing stated left undone" rule): an Efficiency/Prevention/Correction/Leap line that names a change (`change`) closes only as done + where (`done` + `where`, with a real change
+  // this turn or an earlier/already marker) or needs J (`needsJ`). `defer` words (later, queued, handoff, next build) pass only with a job launched this turn named on the line (`running`);
+  // `hindsight` lines ("would have saved") pass only when a real change was made this turn. Plan/log writes (handoffs, open items, board/Scoreboard rows) are no change.
+  'closure-line': {
+    numbers: { enforce: 2 },
+    patterns: {
+      label: /^[ \t>]*(?:[-*+\u2022][ \t]+)?(?:\*\*|__)?[ \t]*(?:Efficiency|Prevention|Correction|Leap)\b[^:\n]{0,30}:(?:\*\*|__)?(.*)$/i,
+      change: /\b(?:mak(?:e|es|ing)|add(?:s|ed|ing)?|chang(?:e|es|ed|ing)|fix(?:es|ed|ing)?|mov(?:e|es|ed|ing)|sav(?:e|es|ing)|updat(?:e|es|ed|ing)|switch(?:es|ed|ing)?|drop(?:s|ped|ping)?|cach(?:e|es|ed|ing)|batch(?:es|ed|ing)?|automat\w*|script\w*|merg(?:e|es|ed|ing)|remov(?:e|es|ed|ing)|replac(?:e|es|ed|ing)|rewrit\w*|build(?:s|ing)?|built|ship(?:s|ped|ping)?|gate|hook|rule|check(?:s|ing)? (?:first|before)|(?:read|run|look)(?:ing)? \w+(?: \w+)? (?:first|before)|will|should(?! have)|from now on|next time|going forward|in future)\b/i,
+      done: /\b(?:done|landed|saved|added|changed|updated|fixed|filed|written|shipped|built|edited|published|pushed|committed|stored|set)\b/i,
+      where: /\b(?:in|to|at|into|on|via)\s+\S|https?:\/\/|`[^`]+`|\/[\w.-]+\/[\w./-]+|\b[\w-]+\.(?:md|ts|json|js|py|sh|html)\b/i,
+      past: /\b(?:already|earlier|previously|last (?:turn|session|night)|yesterday)\b|\b(?:at|on) \d{1,2}:\d{2}\b/i,
+      needsJ: /\bneeds? (?:J|you|your)\b|\(needs you\)|\byour (?:call|decision|ok|upload)\b|\b(?:none yet|not (?:done|made)|held|left)\b[^.\n]{0,40}\birreversible\b/i, // 0.6.27: an irreversible step is J-only by definition
+      defer: /\bnone yet\b|\b(?:later|queued|queue|handoff|hand-off|next (?:build|zip|version|release|session|chat|plugin)|tomorrow|follow-?up|pending|parked|backlog|to-?do)\b/i,
+      running: /\b(?:running|launched|relaunched|dispatched|started|kicked off|in progress|ETA)\b/i,
+      hindsight: /\b(?:would|could|should|might)(?: have|'ve)\b|\bwould['\u2019]ve\b/i,
+      modal: /\b(?:would|could|should|will|might|to be|once|until|when)\s+(?:\w+\s+){0,2}$/i,
+      // 0.6.27 false-alarm fixes (AB-0626d audit): `noun` = backlog/queue naming a thing ("backlog merge", "queue runner"), not a parking place;
+      // `reply` = a Correction fixed by this reply itself; `now` + `whereNoun` = "the goal file now ..." after a real change this turn.
+      noun: /(?<!\b(?:to|in|into|on|onto|for)\s+(?:the\s+|my\s+|a\s+|its\s+)?)\b(?:backlog|queue)\s+(?=(?:work|merge|runner|items?|rows?|fixes)\b)/i,
+      reply: /\b(?:corrected|fixed|retracted|withdrawn|restated|amended)\b[^.;\n]{0,20}\b(?:in|by) (?:this|the) (?:reply|message|answer)\b/i,
+      now: /(?<!\bfrom\s)\bnow\b(?!\s+on\b)/i,
+      whereNoun: /\b(?:the|this|my) [\w-]+ (?:file|card|skill|pack|list|memory)\b/i,
+    },
+    messages: { line: 'Close each fix line: end it "done in <where>" (only if changed this turn) or "needs J". Later/queued/handoff/next build only with a job launched this turn; hindsight needs the change made now.' },
+  },
   // 0.6.17 deep-cap: failed checks per draft before PASS-with-note (0 = never fail a draft).
   'deep-cap': { numbers: { cap: 1 } },
   // 0.6.17 deep-judge: replies under minWords words skip the AI judge unless `claim` matches; `rules` is the judge's system text.
@@ -334,7 +371,7 @@ export const BUNDLED: Record<string, CheckDef> = {
     messages: {
       line: 'J wrote mid-turn — answer via SendUserMessage now; hand the rest to a background agent',
       block: 'Blocked: J wrote mid-turn ({n} unanswered). Reply now: ONE SendUserMessage covering each message below, then delegate the rest (Agent/SendMessage). Other tools stay blocked till it goes out. {list}',
-      fold: 'Not sent: J added {n} message(s) within {secs}s. Fold them into this same reply and resend via SendUserMessage; no new check_reply needed. {list}',
+      fold: 'Not sent: J added {n} message(s) within {secs}s. Fold them into this same reply and resend via SendUserMessage; no new check_reply needed. {list}', // unused since 0.6.25 (kept so packs that set it still validate)
     },
   },
   // 0.6.3 done-claim: a J-facing done/fixed/live/shipped/published/verified claim about this turn's write with no read-back after the last write.

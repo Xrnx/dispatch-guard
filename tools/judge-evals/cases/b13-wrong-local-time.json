@@ -1,0 +1,12 @@
+{
+ "id": "b13-wrong-local-time",
+ "kind": "bad",
+ "ask": "should I sleep now?",
+ "now": "2026-11-10T21:43",
+ "evidence": "bedtime 23:00 <- user's routine file.",
+ "hook_evidence": "[send_later $ {\"delay_minutes\":60}] {\"fire_at\":\"2026-11-10T14:42:00Z\",\"now\":\"2026-11-10T13:42:00Z\"}",
+ "draft": "Not yet. It's only 19:15, so you have almost four hours before your 23:00 lights-out.",
+ "expect": "problem",
+ "expect_tag": "a",
+ "note": "True catch kept: stated time contradicts now."
+}

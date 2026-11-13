@@ -1,0 +1,10 @@
+{
+ "id": "n18-applied-edit-no-match",
+ "kind": "benign",
+ "ask": "There's an unsaved orchestrator card. Should I save it?",
+ "evidence": "09:20: live card md5 = the tested round-1 card. Only card shown by this chat: 07:58, whose edits are now in the live file.",
+ "hook_evidence": "[Bash $ md5sum SKILL.md] ced74a62  SKILL.md",
+ "draft": "Don't save it. The 07:58 card's changes are already in the live card, so its edits no longer match the live text and saving it again adds nothing.",
+ "expect": "ok",
+ "note": "Real FP 9 Nov 09:20: 'edits no longer match the live text' read as contradicting 'edits are in the live file'; both are true."
+}

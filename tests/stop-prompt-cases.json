@@ -1,5 +1,5 @@
 {
-  "note": "Eval cases for the prompt-type Stop hook in hooks/hooks.json. Prompt hooks cannot run in unit tests (claude plugin test): run these in a replay/eval run (feed `input` as the hook input, compare the returned ok).",
+  "note": "Eval cases for the prompt-type Stop hook in hooks/hooks.json. Prompt hooks cannot run in unit tests (claude plugin test): run these in a replay/eval run (feed `input` as the hook input, compare the returned ok). 0.6.25: cases with \"layer\": \"module\" are decided by hooks/register.ts before the prompt hook runs (classic.Stop and check_reply); their unit tests are in hooks/dispatch-guard.test.ts ('0.6.25 Stop hook', '0.6.25 Stop-hook continuation').",
   "cases": [
     {
       "id": "S1-recommendations-not-built",
@@ -110,6 +110,76 @@
         "ok": true
       },
       "why": "Why-J line, Claude-wide save and a code check that fires every time."
+    },
+    {
+      "id": "S-0625a-passed-check-reply",
+      "layer": "module",
+      "input": {
+        "stop_hook_active": false,
+        "background_tasks": [],
+        "last_assistant_message": "Noted. Two options left.",
+        "passed_check_reply": true
+      },
+      "expected": {
+        "ok": true,
+        "prompt_hook_runs": false
+      },
+      "why": "0.6.25: the Stop criteria run inside check_reply's judge (rules c, e, g); a final reply check_reply passed this turn ends the classic.Stop chain, so J never sees a second near-duplicate reply."
+    },
+    {
+      "id": "S-0625b-unchecked-reply-still-reviewed",
+      "layer": "module",
+      "input": {
+        "stop_hook_active": false,
+        "background_tasks": [],
+        "last_assistant_message": "Port recommendations:\n- Weekday check: cheap, worth adding.\n\nNext: build it.",
+        "passed_check_reply": false
+      },
+      "expected": {
+        "ok": false,
+        "prompt_hook_runs": true
+      },
+      "why": "A reply that skipped check_reply still reaches the prompt hook."
+    },
+    {
+      "id": "S-0625c-continuation-repeats",
+      "layer": "module",
+      "input": {
+        "after_stop_block": true,
+        "already_sent": "Yes, too narrow. Replacing it with one general rule in 0.6.25.",
+        "draft": "Yes, the does X gate was too narrow; replacing it with one general rule."
+      },
+      "expected": {
+        "check_reply": "fail: stop-repeat"
+      },
+      "why": "13 Nov 00:29: J saw two near-identical replies. After a Stop-hook block the continuation sends only what is new."
+    },
+    {
+      "id": "S-0625d-continuation-new-only",
+      "layer": "module",
+      "input": {
+        "after_stop_block": true,
+        "already_sent": "Yes, too narrow. Replacing it with one general rule in 0.6.25.",
+        "draft": "Why you caught it: I checked one shape, not the general rule."
+      },
+      "expected": {
+        "check_reply": "pass"
+      },
+      "why": "Only the missing follow-up goes out."
+    },
+    {
+      "id": "S-0625e-heldout-bookkeeping-fix",
+      "layer": "module",
+      "held_out": true,
+      "input": {
+        "after_stop_block": true,
+        "already_sent": "Logged the miss on the Scoreboard and saved the rule to standing rules.",
+        "draft": "Saved the rule to standing rules and logged the miss on the Scoreboard."
+      },
+      "expected": {
+        "check_reply": "fail: stop-repeat"
+      },
+      "why": "HELD OUT of tuning: a bookkeeping-only fix restated in different word order; the continuation should send no text."
     }
   ]
 }
