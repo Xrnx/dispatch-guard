@@ -3018,7 +3018,7 @@ test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft pas
   expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
   expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 1, judge_ok: 1, judge_unavailable: 0, tokens_in: 100, tokens_out: 20, tokens_cache: 50 })
   expect(Object.values(d.fail_checks).reduce((a: number, b: any) => a + b, 0)).toBeGreaterThanOrEqual(2) // 0.6.22: the two failed BADC rounds are counted by check id
-  expect(PLUGIN_VERSION).toBe('0.6.36')
+  expect(PLUGIN_VERSION).toBe('0.6.37')
 })
 test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
   const { mem } = deepEngine(on, true)
@@ -3058,7 +3058,7 @@ test('0.6.19 deep-stats: the row has only the listed count fields, no draft/prob
   await $.tool.call(chk(CLEAN))
   await $.turn.complete(end('t1', CLEAN))
   const d = statRows(mem)[0].data
-  expect(Object.keys(d).sort()).toEqual(['attended', 'check_ms_total', 'checker_rounds_ms_total', 'dark_hits', 'dark_samples', 'date', 'fail_checks', 'final_count', 'final_ms_max', 'final_ms_total', 'first_draft_pass', 'first_ms_total', 'judge_calls', 'judge_ms_total', 'judge_ok', 'judge_unavailable', 'lat_ack', 'lat_question', 'lat_task1', 'lat_taskN', 'plugin_version', 'post_first_ms_total', 'prompts_judged', 'rounds_total', 'session', 'session_origin', 'source', 'tokens_cache', 'tokens_in', 'tokens_out', 'turn_count', 'turn_ms_max', 'turn_ms_total', 'unchecked', 'unchecked_unattended'])
+  expect(Object.keys(d).sort()).toEqual(['attended', 'check_ms_total', 'checker_rounds_ms_total', 'dark_hits', 'dark_samples', 'date', 'fail_checks', 'final_count', 'final_ms_max', 'final_ms_total', 'first_draft_pass', 'first_ms_total', 'judge_calls', 'judge_ms_total', 'judge_ok', 'judge_unavailable', 'lat_ack', 'lat_question', 'lat_task1', 'lat_taskN', 'plugin_version', 'post_first_ms_total', 'prompts_judged', 'rounds_total', 'session', 'session_origin', 'source', 'stopped_by_j', 'tokens_cache', 'tokens_in', 'tokens_out', 'turn_count', 'turn_ms_max', 'turn_ms_total', 'unchecked', 'unchecked_unattended'])
   expect(JSON.stringify(statRows(mem))).not.toMatch(/SECRET|Correction|date was wrong/)
   for (const [k, v] of Object.entries(d)) expect(k === 'fail_checks' || k === 'dark_hits' ? Object.values(v as object).every(c => typeof c === 'number') : k === 'dark_samples' ? typeof v === 'object' : k.startsWith('lat_') ? Object.values(v as object).every(c => typeof c === 'number') : typeof v === 'string' ? v.length < 60 : typeof v === 'number').toBe(true)
 })
@@ -4260,10 +4260,10 @@ test('0.6.29 fix d: the first deep J turn on a new version queues one Scoreboard
   await $.turn.complete(end('d2', 'Noted.'))
   const rows = ((mem.corrLog as any[]) ?? []).filter(r => r.collection === 'fixes')
   expect(rows.length).toBe(1)
-  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0636', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.36' } })
+  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0637', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.37' } })
   expect(rows[0].data.detail).toContain(CHANGELOG_LINE)
-  expect(mem[VERSION_ROW_KEY]).toBe('0.6.36')
-  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.36 (auto)')
+  expect(mem[VERSION_ROW_KEY]).toBe('0.6.37')
+  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.37 (auto)')
 })
 
 // 0.6.30 cross-turn bleed (live 13 Nov 12:37-12:39 SGT): rule (d) cited "Are you done with all fixes?" (12:35, answered) against later asks.
@@ -4609,4 +4609,113 @@ test('W14 deep-stats: a failed judge round counts fail_checks judge (total) and 
   await $.tool.call(chk(CLEAN)); await $.tool.call(chk(CLEAN))
   await $.turn.complete(end('t1', CLEAN))
   expect(latRow(mem).fail_checks).toMatchObject({ judge: 1, 'judge:c': 1, 'judge:d': 1 })
+})
+
+// ---- W23 early reply: a J turn with nothing J-visible is held after EARLY_REPLY_SECS or EARLY_REPLY_CALLS ----
+import { EARLY_REPLY_SECS, EARLY_REPLY_CALLS, EARLY_REPLY_VALVE, EARLY_REPLY_MSG } from './register'
+const EARLY = /^Reply to J first: the answer, or one 'on it, ETA <time>' line via SendUserMessage; then continue\.$/
+const ed = () => ({ tool: 'Edit', file_path: '/x' } as any)
+const jTurnAt = async ($: any, on: any, id: string, list = TOOLS_WITH_SEND) => { engine(on); on('tool.list', () => ({ value: list })); const c = clockAt(on); await $.prompt.submit({ text: 'fix the clause' } as any); await $.turn.start({ text: 'fix the clause', turnId: id }); return c }
+
+test('W23 constants and message', () => {
+  expect([EARLY_REPLY_SECS, EARLY_REPLY_CALLS, EARLY_REPLY_VALVE]).toEqual([45, 4, 6])
+  expect(EARLY_REPLY_MSG).toMatch(EARLY)
+})
+test('W23 fires at the 4-call threshold, not before; read-only lookups count too', async ($, on) => {
+  await jTurnAt($, on, 'e1')
+  for (const t of [ed(), { tool: 'Read', file_path: '/x' }, { tool: 'Grep', pattern: 'x' }, ed()]) expect(denyOf(await $.tool.call(t as any))).toBe('')
+  expect(denyOf(await $.tool.call({ tool: 'Read', file_path: '/y' } as any))).toMatch(EARLY)
+  expect(denyOf(await $.tool.call({ tool: 'Agent', prompt: 'x', description: 'x', run_in_background: true } as any))).toMatch(EARLY) // delegation is not a reply
+})
+test('W23 fires at 45 s, not at 44 s', async ($, on) => {
+  const c = await jTurnAt($, on, 'e2')
+  c.t += (EARLY_REPLY_SECS - 1) * 1000
+  expect(denyOf(await $.tool.call(ed()))).toBe('')
+  c.t += 1000
+  expect(denyOf(await $.tool.call(ed()))).toMatch(EARLY)
+})
+test('W23 the reply path stays open past the threshold; a SendUserMessage resets it for the rest of the turn', async ($, on) => {
+  const c = await jTurnAt($, on, 'e3')
+  c.t += 60_000
+  expect(denyOf(await $.tool.call(ed()))).toMatch(EARLY)
+  for (const t of [{ tool: 'ToolSearch', query: 'select:SendUserMessage' }, { tool: CHECK_TOOL, text: 'On it, ETA 21:30.' }]) expect([t.tool, denyOf(await $.tool.call(t as any))]).toEqual([t.tool, ''])
+  expect(denyOf(await $.tool.call(send('On it, ETA 21:30.')))).toBe('')
+  for (let i = 0; i < 8; i++) expect(denyOf(await $.tool.call(ed()))).toBe('')
+})
+test('W23 a new J turn starts a fresh count', async ($, on) => {
+  await jTurnAt($, on, 'e4')
+  for (let i = 0; i < 4; i++) await $.tool.call(ed())
+  expect(denyOf(await $.tool.call(ed()))).toMatch(EARLY)
+  await $.turn.complete(end('e4', 'Done: clause fixed.'))
+  await $.prompt.submit({ text: 'next one' } as any); await $.turn.start({ text: 'next one', turnId: 'e5' } as any)
+  for (let i = 0; i < 4; i++) expect(denyOf(await $.tool.call(ed()))).toBe('')
+})
+test('W23 never on a turn with no J prompt (agent report, task notification), on subagent calls, or without SendUserMessage in the tool list', async ($, on) => {
+  engine(on); on('tool.list', () => ({ value: TOOLS_WITH_SEND })); const c = clockAt(on)
+  await $.turn.start({ text: '<task-notification><status>completed</status><result>done</result></task-notification>', turnId: 'n1', origin: { kind: 'task-notification' } } as any)
+  c.t += 120_000
+  for (let i = 0; i < 8; i++) expect(denyOf(await $.tool.call(ed()))).toBe('')
+  await $.prompt.submit({ text: 'fix it' } as any); await $.turn.start({ text: 'fix it', turnId: 'n2' } as any)
+  for (let i = 0; i < 8; i++) expect(denyOf(await $.tool.call({ tool: 'Edit', file_path: '/x', agentId: 'a1' } as any))).toBe('')
+})
+test('W23 no SendUserMessage in the tool list: never denies (the final text is the only reply)', async ($, on) => {
+  await jTurnAt($, on, 'e6', [{ name: 'Bash', description: '', mcp: false }] as any)
+  for (let i = 0; i < 8; i++) expect(denyOf(await $.tool.call(ed()))).toBe('')
+})
+test('W23 valve: after EARLY_REPLY_VALVE denials the turn is let through (no deadlock)', async ($, on) => {
+  await jTurnAt($, on, 'e7')
+  for (let i = 0; i < 4; i++) await $.tool.call(ed())
+  for (let i = 0; i < EARLY_REPLY_VALVE; i++) expect(denyOf(await $.tool.call(ed()))).toMatch(EARLY)
+  expect(denyOf(await $.tool.call(ed()))).toBe('')
+})
+test('W23 mid-turn block still works and takes precedence; one SendUserMessage clears both', async ($, on) => {
+  await jTurnAt($, on, 'e8')
+  expect(denyOf(await $.tool.call(ed()))).toBe('')
+  await $.prompt.submit(jMid('also clause 9', 'e8'))
+  expect(denyOf(await $.tool.call(ed()))).toMatch(BLOCK)
+  expect(denyOf(await $.tool.call(send('Clause 9: on it, ETA 21:30.')))).toBe('')
+  for (let i = 0; i < 6; i++) expect(denyOf(await $.tool.call(ed()))).toBe('')
+})
+
+// ---- W23 stopped_by_j: an interrupted or abandoned J message books its wait in final_ms ----
+test('W23 stats: J stops a turn with no visible reply -> its wait up to the stop is in final_ms, stopped_by_j 1', async ($, on) => {
+  const { mem } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  const c = clockAt(on)
+  await $.prompt.submit({ text: 'one' } as any)
+  await $.turn.start(turn('s1')); c.t += 3000
+  await $.tool.call(chk(CLEAN)); await $.turn.complete(end('s1', CLEAN)) // answered: 3000
+  await $.prompt.submit({ text: 'two' } as any)
+  await $.turn.start(turn('s2')); c.t += 50_000
+  await $.turn.complete({ answer: '', turnId: 's2', reason: 'aborted', durationMs: 1, isAborted: true } as any)
+  await $.prompt.submit({ text: 'three' } as any) // commits the group
+  expect(latRow(mem)).toMatchObject({ final_count: 2, final_ms_total: 3000 + 50_000, final_ms_max: 50_000, stopped_by_j: 1 })
+})
+test('W23 stats: the next J prompt finds the previous one unanswered (no text, no send) -> booked up to its arrival, stopped_by_j 1', async ($, on) => {
+  const { mem } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  const c = clockAt(on)
+  await $.prompt.submit({ text: 'one' } as any)
+  await $.turn.start(turn('s3')); c.t += 2000
+  await $.tool.call(chk(CLEAN)); await $.turn.complete(end('s3', CLEAN))
+  await $.prompt.submit({ text: 'two' } as any)
+  await $.turn.start(turn('s4')); c.t += 1000
+  await $.turn.complete(end('s4', ''))
+  c.t += 9000
+  await $.prompt.submit({ text: 'you there?' } as any)
+  expect(latRow(mem)).toMatchObject({ final_count: 2, final_ms_total: 2000 + 10_000, stopped_by_j: 1 })
+})
+test('W23 stats: an answered prompt never counts as stopped; an interrupt after a visible reply adds nothing', async ($, on) => {
+  const { mem } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  const c = clockAt(on)
+  await $.prompt.submit({ text: 'zero' } as any)
+  await $.turn.start(turn('s5a')); c.t += 1000
+  await $.tool.call(chk(CLEAN)); await $.turn.complete(end('s5a', CLEAN)) // answered: 1000 (also opens today's stats row)
+  await $.prompt.submit({ text: 'one' } as any)
+  await $.turn.start(turn('s5')); c.t += 2000
+  await $.tool.call(chk(CLEAN)); await $.tool.call(send(CLEAN)); c.t += 5000
+  await $.turn.complete({ answer: '', turnId: 's5', reason: 'aborted', durationMs: 1, isAborted: true } as any)
+  await $.prompt.submit({ text: 'two' } as any)
+  expect(latRow(mem)).toMatchObject({ final_count: 2, final_ms_total: 1000 + 2000, stopped_by_j: 0 })
 })

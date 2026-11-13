@@ -43,7 +43,7 @@ const rig = (on: any, opts: { decision?: string; reason?: string; down?: string;
 }
 // As in production: a flush follows a main-thread ArtifactData write that passed.
 const flush = async ($: any): Promise<void> => { await $.tool.call({ tool: 'ArtifactData', action: 'set', url: 'https://claude.ai/artifact/x', collection: 'status', doc_id: 'trigger', data: {} }) }
-const prompt = async ($: any): Promise<void> => { await $.prompt.submit({ text: 'ok thanks' } as any) }
+const prompt = async ($: any): Promise<void> => { await $.prompt.submit({ text: '<task-notification><status>completed</status></task-notification>' } as any) }
 const DS = 'deepstats-session-W1300000-2026-11-13'
 const row = (id: string, data: unknown, collection?: string) => ({ id, data, ...(collection === undefined ? {} : { collection }) })
 const QUEUE = () => [row('hook-W1300000-a', { n: 1 }), row(DS, { prompts: 3 })]

@@ -1,6 +1,6 @@
 {
   "name": "dispatch-guard",
-  "version": "0.6.36",
+  "version": "0.6.37",
   "description": "Loads the orchestrator card at the start of every chat and flags misses in each turn's replies (checked line, landed fixes, asks first, legal sources, labels, scope, question edits, corrections). Deep mode (default): check_reply pre-send check with an AI judge before the reply goes out; `light mode` turns it off.",
   "author": {
     "name": "Xrnx"
