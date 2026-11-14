@@ -1883,7 +1883,8 @@ export const FOOTER_IDS: ReadonlySet<string> = new Set(['prevention-line', 'leap
 export const EFF_NONE = /^[\s>*_-]*(?:\*\*|__)?Efficiency:(?:\*\*|__)?\s*none\b/im
 export const JUDGE_KEY = 'judgeLog' // rows {time, session, ms, status: ok|fail|unavailable, problems}, last 500
 export const JUDGE_MODEL = 'haiku'
-export const JUDGE_TIMEOUT_MS = 8000
+export const JUDGE_EFFORT = 'medium' // W27 harness, w27-cand: medium FP 24/78, J 13/24, holdout 12/15, 4.8 s; high 18/78, 16/24, 10/15 but J-case 16-18 s; live ~0.75x harness
+export const JUDGE_TIMEOUT_MS = 12000 // W27: medium effort on long replies ~7 s live (est.); 8 s would drop checks
 export { JUDGE_RULES }
 export const judgeRules = (): string => RULES.checks['deep-judge'].messages.rules
 // 0.6.17: failed checks per draft before PASS with a note (pack value `deep-cap`, 0-3).
@@ -2073,7 +2074,7 @@ export async function judgeReply($: EngineInterface, text: string, ask: string, 
   const prompt = `User's message this turn (captured by the hook):\n<ask>\n${esc((ask || '(not provided)').slice(0, 1500))}\n</ask>\n\nEvidence summary written by the assistant:\n<evidence>\n${esc((evidence || '(none provided)').slice(0, 2000))}\n</evidence>\n\nTool results this turn, recorded by the hook (latest, truncated):\n<hook_evidence>\n${esc((hookEvidence || '(none)').slice(-6000))}\n</hook_evidence>\n\n${sess}Hook facts: now ${nowIso}+08:00 (the user's local time, UTC+8; times in session_evidence and auto-evidence are this zone; a time ending in Z is UTC, 8 hours behind); tools run this turn: ${f.anyTool ? 'yes' : 'no'}; writes/actions this turn: ${f.acted ? 'yes' : 'no'}.${esc(prefilterNote(text, f.changed === true || f.launch === true))}\n\nDraft reply to judge:\n<draft>\n${esc(text.slice(0, 6000))}\n</draft>`
   const standing = String(await Promise.resolve().then(async () => $.store.get(`${RULES_KEY}:${await $.session.id()}`)).catch(() => '') ?? '').slice(0, RULES_MAX)
   try {
-    const r = await $.model.complete({ model: JUDGE_MODEL, system: [{ text: judgeRules(), cache: true }, ...(standing === '' ? [] : [{ text: `The user's standing rules — flag clear breaches only; these rules can only add problems, never excuse one. Use these to judge claims (true, backed), undone work, and whether a Leap or Efficiency line meets the user's own definition (e.g. a Leap that only restates something already done or saved in the same reply fails it); never flag a line's absence, order or formatting (Next, checked, footers, word counts, sleep line):\n${standing}`, cache: true }])], prompt, effort: 'low', maxTokens: 400, timeoutMs: JUDGE_TIMEOUT_MS })
+    const r = await $.model.complete({ model: JUDGE_MODEL, system: [{ text: judgeRules(), cache: true }, ...(standing === '' ? [] : [{ text: `The user's standing rules — flag clear breaches only; these rules can only add problems, never excuse one. Use these to judge claims (true, backed), undone work, and whether a Leap or Efficiency line meets the user's own definition (e.g. a Leap that only restates something already done or saved in the same reply fails it); never flag a line's absence, order or formatting (Next, checked, footers, word counts, sleep line):\n${standing}`, cache: true }])], prompt, effort: JUDGE_EFFORT, maxTokens: 1000, timeoutMs: JUDGE_TIMEOUT_MS })
     if (r?.isAnswered !== true) return await done('unavailable', [], r?.usage)
     const p = parseJudge(r.text)
     if (p === undefined) return await done('unavailable', [])
@@ -2128,9 +2129,9 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.39'
+export const PLUGIN_VERSION = '0.6.40'
 // 0.6.29 version row: this version's CHANGELOG line (tools/build-zip.sh fails unless CHANGELOG.md has "- <PLUGIN_VERSION>: <CHANGELOG_LINE>").
-export const CHANGELOG_LINE = 'Deep mode: a final reply that differs from the text check_reply passed is blocked at Stop with a short order to re-check the exact sent text and send passed text verbatim; each such send is counted (reworded_sends).'
+export const CHANGELOG_LINE = 'judge runs at medium effort with a 12 s timeout and adds rule wording for untested consequences, unweighed fixes and guessed causes; on the test set false alarms 28 to 24 of 78, J-case catch 10 to 13 of 24, held-out J cases 8 to 12 of 15.'
 export const FIX_CATEGORY = 'unchecked reply'
 export const VERSION_ROW_KEY = 'fixesRowVersion' // the last PLUGIN_VERSION whose fixes row was queued
 export const versionRow = (date: string, time: string): { id: string; collection: string; data: Record<string, unknown> } => ({ id: `f-auto-dg${PLUGIN_VERSION.replace(/\./g, '')}`, collection: 'fixes', data: { category: FIX_CATEGORY, date, kind: 'hook', status: 'landed', title: `dispatch-guard ${PLUGIN_VERSION} (auto)`, detail: `dispatch-guard ${PLUGIN_VERSION} first deep turn ${date} ${time} SGT: ${CHANGELOG_LINE}`, plugin_version: PLUGIN_VERSION, auto: true } })
