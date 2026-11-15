@@ -3,7 +3,9 @@
 import sys,os,json,glob,hashlib,subprocess,time,re,argparse
 from concurrent.futures import ThreadPoolExecutor
 HERE=os.path.dirname(os.path.abspath(__file__))
-MODEL='haiku'
+MODEL=os.environ.get('JUDGE_MODEL','haiku')   # W21: second arm via JUDGE_MODEL=sonnet
+GRADER=os.environ.get('JUDGE_GRADER','sonnet')   # W21: grades whether a flag raises J's point (cases with j_point)
+PAR=int(os.environ.get('JUDGE_PAR','6'))
 def esc(t): return re.sub(r'</(draft|ask|evidence|hook_evidence)>',lambda m:'<\\/'+m.group(1),t,flags=re.I)
 # 0.6.25: mirrors PREFILTER / prefilterLines in register.ts (deferral words on lines when no change or launch ran this turn).
 PREFILTER=re.compile(r"\b(?:next (?:build|zip|version|release|session)|later|follow-?up|queued|would|could|should|none yet|will)\b|['\u2019]ll\b",re.I)
@@ -57,30 +59,62 @@ def call(rules,c,rep,layout=None):
     key=hashlib.sha256((rules+'\0'+prompt+'\0'+MODEL+'\0'+str(rep)).encode()).hexdigest()
     cp=os.path.join(HERE,'cache',key+'.json')
     if os.path.exists(cp): r=json.load(open(cp)); r['cached']=True; return r
-    t=time.time()
+    t=time.time(); out,cost='',None
     try:
-        p=subprocess.run(['claude','-p','--model',MODEL,'--tools','','--settings','{"disableAllHooks":true}','--system-prompt',rules,'--output-format','text'],
-            input=prompt,capture_output=True,text=True,timeout=90,cwd='/tmp')
-        out=p.stdout
+        p=subprocess.run(['claude','-p','--model',MODEL,'--tools','','--settings','{"disableAllHooks":true}','--system-prompt',rules,'--output-format','json'],
+            input=prompt,capture_output=True,text=True,timeout=120,cwd='/tmp')
+        try: j=json.loads(p.stdout); out=j.get('result') or ''; cost=j.get('total_cost_usd')
+        except Exception: out=p.stdout
     except Exception as e: out=''
     ms=int((time.time()-t)*1000)
     v=parse(out)
-    r={'verdict':v,'ms':ms,'raw':out[:500]}
+    r={'verdict':v,'ms':ms,'cost':cost,'raw':out[:500]}
     if v is not None: os.makedirs(os.path.dirname(cp),exist_ok=True); json.dump(r,open(cp,'w'))   # only cache parsed answers (0.6.29: the cache dir does not ship)
     r['cached']=False; return r
+GRADE_SYS=("You grade an automated reviewer. A user corrected an assistant reply; the reviewer saw the same reply before the user did. "
+  "Decide whether ANY of the reviewer's listed problems raises the same substantive point as the user's correction, i.e. acting on it would have "
+  "led the assistant to fix what the user pointed out. A different problem in the same reply, or a generic complaint about missing evidence for some "
+  "other claim, does not count. Reply with strict JSON only: {\"match\":true|false,\"which\":<index or null>}")
+def grade(c,problems):  # W21: J-point match for cases carrying j_point; cached like verdicts
+    if not problems: return False
+    prompt=(f"User's correction (their words): {c['j_words']}\nThe point it makes: {c['j_point']}\n\nReviewer's problems:\n"+
+      '\n'.join(f"{i}. {p}" for i,p in enumerate(problems)))
+    key=hashlib.sha256(('grade\0'+GRADE_SYS+'\0'+prompt+'\0'+GRADER).encode()).hexdigest(); cp=os.path.join(HERE,'cache','g-'+key+'.json')
+    if os.path.exists(cp): return json.load(open(cp))['match']
+    for _ in range(2):
+        try:
+            p=subprocess.run(['claude','-p','--model',GRADER,'--tools','','--settings','{"disableAllHooks":true}','--system-prompt',GRADE_SYS,'--output-format','text'],
+                input=prompt,capture_output=True,text=True,timeout=120,cwd='/tmp')
+            m=re.search(r'\{[\s\S]*\}',p.stdout); g=json.loads(m.group(0)); ok=bool(g.get('match'))
+            os.makedirs(os.path.dirname(cp),exist_ok=True); json.dump({'match':ok,'which':g.get('which')},open(cp,'w')); return ok
+        except Exception: pass
+    return None
+def load_cases():  # W21: *.json (one case each) plus *.jsonl (one case per line, e.g. j-corrections.jsonl)
+    cs=[json.load(open(f)) for f in sorted(glob.glob(os.path.join(HERE,'cases','*.json')))]
+    for f in sorted(glob.glob(os.path.join(HERE,'cases','*.jsonl'))):
+        cs+=[json.loads(l) for l in open(f) if l.strip()]
+    return cs
 def tags(v): return [m.group(1).lower() for p in v['problems'] for m in [re.match(r'^\s*\(?([a-f])\)',p,re.I)] if m]
 def run(rules_file,reps,tag='',layout=None):
     rules=open(rules_file).read().strip()
-    cases=[json.load(open(f)) for f in sorted(glob.glob(os.path.join(HERE,'cases','*.json')))]
+    cases=load_cases()
     jobs=[(c,i) for c in cases for i in range(reps)]
-    with ThreadPoolExecutor(6) as ex: res=list(ex.map(lambda j:call(rules,*j,layout),jobs))
-    S=dict(fp=0,nb=0,catch=0,nbad=0,tagok=0,ntag=0,ms=[],err=0,fresh=0); miss=[]
-    for (c,i),r in zip(jobs,res):
+    with ThreadPoolExecutor(PAR) as ex: res=list(ex.map(lambda j:call(rules,*j,layout),jobs))
+    jp=[(c,r['verdict']['problems']) if c.get('j_point') and r['verdict'] and not r['verdict']['ok'] else None for (c,i),r in zip(jobs,res)]
+    with ThreadPoolExecutor(PAR) as ex: gr=list(ex.map(lambda x: grade(*x) if x else False,jp))
+    S=dict(fp=0,nb=0,catch=0,nbad=0,tagok=0,ntag=0,ms=[],err=0,fresh=0,jcatch=0,nj=0,cost=[]); miss=[]
+    for (c,i),r,g in zip(jobs,res,gr):
         v=r['verdict']
         if not r['cached']: S['fresh']+=1
         if v is None: S['err']+=1; miss.append(f"{c['id']}#{i}: UNPARSEABLE judge output"); continue
         if not r['cached']: S['ms'].append(r['ms'])
+        if not r['cached'] and r.get('cost') is not None: S['cost'].append(r['cost'])
         flagged=not v['ok']
+        if c.get('j_point'):   # W21: user-caught case; counts only when a flag raises the user's own point (graded), never a different problem
+            S['nj']+=1
+            if g: S['jcatch']+=1
+            else: miss.append(f"JMISS {c['id']}#{i}: "+('flagged other: '+v['problems'][0][:120] if flagged else 'judged ok'))
+            continue
         if c['kind']=='benign':
             S['nb']+=1
             if flagged: S['fp']+=1; miss.append(f"FP {c['id']}#{i}: {v['problems'][0][:140]}")
@@ -94,7 +128,7 @@ def run(rules_file,reps,tag='',layout=None):
                     else: miss.append(f"TAG {c['id']}#{i}: want {c['expect_tag']}, got {tags(v)}")
             else: miss.append(f"MISS {c['id']}#{i}: judged ok")
     pct=lambda a,b: (a/b if b else 0.0)
-    out=dict(fp=pct(S['fp'],S['nb']),catch=pct(S['catch'],S['nbad']),tag=pct(S['tagok'],S['ntag']),
+    out=dict(fp=pct(S['fp'],S['nb']),catch=pct(S['catch'],S['nbad']),tag=pct(S['tagok'],S['ntag']),jcatch=pct(S['jcatch'],S['nj']),cost=(sum(S['cost'])/len(S['cost']) if S['cost'] else None),
       ms=(sum(S['ms'])/len(S['ms']) if S['ms'] else None),misses=miss,counts=S,rules=rules_file)
     return out
 if __name__=='__main__':
@@ -104,6 +138,8 @@ if __name__=='__main__':
     print(f"false-positive rate (benign): {o['fp']*100:.1f}% ({S['fp']}/{S['nb']})")
     print(f"catch rate (bad):             {o['catch']*100:.1f}% ({S['catch']}/{S['nbad']})")
     print(f"tag accuracy (caught, tagged):{o['tag']*100:.1f}% ({S['tagok']}/{S['ntag']})")
+    print(f"user-point catch (j_point):   {o['jcatch']*100:.1f}% ({S['jcatch']}/{S['nj']})")
+    print("mean cost (fresh calls):      "+(f"${o['cost']:.4f}" if o['cost'] else "n/a"))
     print("mean latency (fresh calls):   "+(f"{o['ms']:.0f} ms" if o['ms'] else "n/a (all cached)"))
     print(f"unparseable: {S['err']}")
     print("per-case misses:"); [print("  "+m) for m in o['misses']] or None
