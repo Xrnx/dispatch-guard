@@ -144,3 +144,26 @@ test('W13 relay absorb keeps a row upserted after the relay went out', async ($,
   expect(f.mem.corrLastFlush).toMatchObject({ decision: 'ask', queued: 1 }) // the follow-up flush is told ask again
   expect((f.mem.corrVersions as any)[`corrections/${DS}`].v).toBe(1) // next relay pins it
 })
+
+// W25: rows the board already holds (written before the hook kept versions) made every relayed batch refuse and the queue never drained.
+test('W25 a stale queue of rows already on the board drains; new rows are still sent; upserts are pinned, not dropped', async ($, on) => {
+  const f = rig(on, { decision: 'ask' })
+  for (const id of ['hook-W2500000-old1', 'hook-W2500000-old2', 'hook-W2500000-old3']) f.db.set(`corrections/${id}`, { v: 1, data: { n: 1 } })
+  f.db.set(`corrections/${DS}`, { v: 4, data: { prompts: 1 } })
+  f.mem.corrLog = [row('hook-W2500000-old1', { n: 1 }), row('hook-W2500000-fresh', { n: 9 }), row('hook-W2500000-old2', { n: 1 }), row(DS, { prompts: 5 }), row('hook-W2500000-old3', { n: 1 })]
+  await flush($)
+  f.clock.now = T0 + RELAY_AGE_MS + MIN
+  let rounds = 0
+  while ((f.mem.corrLog as any[]).length > 0 && rounds < 10) {
+    rounds++
+    await prompt($)
+    const line = (f.relays().at(-1) as string | undefined)?.split('\n').find(l => l.includes('scoreboard-flush:'))
+    if (line === undefined) break
+    await $.tool.call({ tool: 'ArtifactData', ...batchOf(line) } as any) // the main model sends the batch as given
+  }
+  expect(f.mem.corrLog).toEqual([])
+  expect(rounds).toBeLessThanOrEqual(6)
+  expect(f.db.get('corrections/hook-W2500000-fresh')?.data).toEqual({ n: 9 }) // the new row was written, not dropped
+  expect(f.db.get(`corrections/${DS}`)?.data).toEqual({ prompts: 5 }) // the upsert landed with its version
+  expect(f.db.get('corrections/hook-W2500000-old1')?.v).toBe(1) // existing rows untouched
+})
