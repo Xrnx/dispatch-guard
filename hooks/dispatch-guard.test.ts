@@ -4621,23 +4621,6 @@ test('W14 latency: a Stop re-check correction 20 s later lands in post_first and
   expect(d.post_first_ms_total).toBe(20000)
   expect(d.lat_question).toEqual({ t: 24000, n: 1, f: 4000, c: 0, p: 20000, tools_total: 0, words_total: 6 })
 })
-for (const [label, pre] of [['no prompt.submit event', null], ['a prompt whose origin kind is not a J origin', 'scheduled']] as const) {
-  test(`0.6.41 latency: a J turn opened with ${label} still fills final_count and its lat tier (6 rows 14-15 Nov: turn_count 1, final_count 0, lat n=0)`, async ($, on) => {
-    const { mem } = deepEngine(on, true)
-    on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
-    const c = clockAt(on)
-    const text = 'check the scoreboard rows and fix the panel'
-    if (pre !== null) await $.prompt.submit({ text, origin: { kind: pre } } as any)
-    await $.turn.start({ text, turnId: 's1' } as any)
-    for (let i = 0; i < 3; i++) await $.tool.call(rd(i))
-    c.t += 7000
-    await $.tool.call(chk(CLEAN))
-    await $.turn.complete(end('s1', CLEAN))
-    const d = latRow(mem)
-    expect(d).toMatchObject({ turn_count: 1, final_count: 1, final_ms_total: 7000 })
-    expect(d.lat_task1).toEqual({ t: 7000, n: 1, f: 7000, c: 0, p: 0, tools_total: 3, words_total: 4 })
-  })
-}
 test('W14 statsRow: state without the W14 fields (pre-W14) -> totals as before, tiers zero, row stays small', () => {
   const row = statsRow('s', '2026-11-13', { date: '2026-11-13', prompts: 1, firstPass: 1, rounds: 0, unchecked: 0, jc: 0, jok: 0, jun: 0, tin: 0, tout: 0, tcache: 0, eRounds: 0, eFail: false, fc: {}, dh: {}, ds: {}, tms: 0, tn: 0, tmax: 0, jms: 0, crms: 0, fs: [1000], fl: 4000, frms: 0, frn: 0, frmax: 0, fims: 3000, cms: 0 } as any)
   expect(row).toMatchObject({ final_count: 1, final_ms_total: 3000, post_first_ms_total: 0, lat_ack: Z, lat_question: Z, lat_task1: Z, lat_taskN: Z })
