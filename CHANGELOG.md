@@ -2,6 +2,7 @@
 
 One line per version, newest first. Every version bump adds its line here in the same commit. Sources: version comments in hooks/*.ts, README 0.6.x sections, git log. "no record" = no comment, README text or commit names that version.
 
+- 0.6.41: the check_reply description asks for the Efficiency and Leap lines in the first draft (missing footers were 75 of 121 rule-check fails, 8 to 15 Nov); checks unchanged.
 - 0.6.40: judge runs at medium effort with a 12 s timeout and adds rule wording for untested consequences, unweighed fixes and guessed causes; on the test set false alarms 28 to 24 of 78, J-case catch 10 to 13 of 24, held-out J cases 8 to 12 of 15.
 - 0.6.39: Deep mode: a final reply that differs from the text check_reply passed is blocked at Stop with a short order to re-check the exact sent text and send passed text verbatim; each such send is counted (reworded_sends).
 - 0.6.38: Judge catches more of the problems the user catches: comparisons without a fairness check, measures presented as working without a test, guessed causes when data was available, and done-claims not checked as the user sees them (catch on the user cases 0 of 24 to 14 of 24); set_rules accepts a later, longer rules text.

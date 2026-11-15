@@ -1850,7 +1850,7 @@ export const CAUGHT_KEY = 'deepCaught' // running count of messages denied befor
 // 0.6.16: deep mode needs check_reply in the session's tool list; where the list is unreadable it is assumed present.
 export const CHECK_SPEC = {
   name: 'check_reply',
-  description: 'Deep mode pre-send check. Pass the full draft reply as text, plus ask (the user message, verbatim) and evidence (short summary of tool results backing its claims); returns "PASS <hash>" or a numbered problem list to fix. Fix and recheck until PASS, then write that exact text as your final reply (mid-turn messages: SendUserMessage with the passed text).',
+  description: 'Deep mode pre-send check. Pass the full draft reply as text, plus ask (the user message, verbatim) and evidence (short summary of tool results backing its claims); returns "PASS <hash>" or a numbered problem list to fix. Fix and recheck until PASS, then write that exact text as your final reply (mid-turn messages: SendUserMessage with the passed text). A substantive draft ends with its **Efficiency:** and **Leap:** lines before the first call (missing footers cost a whole round).',
   inputSchema: { type: 'object', properties: {
     text: { type: 'string', description: 'The full draft reply, exactly as it will be sent.' },
     ask: { type: 'string', description: "The user's message this turn, verbatim." },
@@ -2129,9 +2129,9 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.40'
+export const PLUGIN_VERSION = '0.6.41'
 // 0.6.29 version row: this version's CHANGELOG line (tools/build-zip.sh fails unless CHANGELOG.md has "- <PLUGIN_VERSION>: <CHANGELOG_LINE>").
-export const CHANGELOG_LINE = 'judge runs at medium effort with a 12 s timeout and adds rule wording for untested consequences, unweighed fixes and guessed causes; on the test set false alarms 28 to 24 of 78, J-case catch 10 to 13 of 24, held-out J cases 8 to 12 of 15.'
+export const CHANGELOG_LINE = 'the check_reply description asks for the Efficiency and Leap lines in the first draft (missing footers were 75 of 121 rule-check fails, 8 to 15 Nov); checks unchanged.'
 export const FIX_CATEGORY = 'unchecked reply'
 export const VERSION_ROW_KEY = 'fixesRowVersion' // the last PLUGIN_VERSION whose fixes row was queued
 export const versionRow = (date: string, time: string): { id: string; collection: string; data: Record<string, unknown> } => ({ id: `f-auto-dg${PLUGIN_VERSION.replace(/\./g, '')}`, collection: 'fixes', data: { category: FIX_CATEGORY, date, kind: 'hook', status: 'landed', title: `dispatch-guard ${PLUGIN_VERSION} (auto)`, detail: `dispatch-guard ${PLUGIN_VERSION} first deep turn ${date} ${time} SGT: ${CHANGELOG_LINE}`, plugin_version: PLUGIN_VERSION, auto: true } })

@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { setRules, CHECK_TOOL } from './register'
+import { setRules, CHECK_TOOL, CHECK_SPEC } from './register'
 import { bundledRules } from './rulepack'
 
 const engine = (on: any) => {
@@ -38,4 +38,8 @@ test('footer-first: both Prevention-line misses reported in round 1 of one check
   await $.turn.start(turn('t1'))
   const f = await $.tool.call(check('Fixed.\nPrevention: added a check.\nCorrection: date wrong.')) as any
   expect(f.result).toMatch(/Why you caught it/)
+})
+
+test('0.6.41 footer-first: check_reply description asks for Efficiency and Leap lines before the first call', () => {
+  expect(CHECK_SPEC.description).toMatch(/\*\*Efficiency:\*\* and \*\*Leap:\*\* lines before the first call/)
 })
