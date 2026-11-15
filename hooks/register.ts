@@ -2131,7 +2131,7 @@ export const STATS_KEY = 'deepStats'
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
 export const PLUGIN_VERSION = '0.6.41'
 // 0.6.29 version row: this version's CHANGELOG line (tools/build-zip.sh fails unless CHANGELOG.md has "- <PLUGIN_VERSION>: <CHANGELOG_LINE>").
-export const CHANGELOG_LINE = 'the check_reply description asks for the Efficiency and Leap lines in the first draft (missing footers were 75 of 121 rule-check fails, 8 to 15 Nov); checks unchanged.'
+export const CHANGELOG_LINE = 'the check_reply description asks for the Efficiency and Leap lines in the first draft (missing footers were 75 of 121 rule-check fails, 8 to 15 Nov); checks unchanged. A J turn whose prompt never started the reply wait (no prompt.submit, or a non-J origin kind, as in the scheduled runs of 14 to 15 Nov: turn_count 1, final_count 0) now starts it at turn start, so final_ms and lat_ack/lat_question/lat_task1/lat_taskN count it.'
 export const FIX_CATEGORY = 'unchecked reply'
 export const VERSION_ROW_KEY = 'fixesRowVersion' // the last PLUGIN_VERSION whose fixes row was queued
 export const versionRow = (date: string, time: string): { id: string; collection: string; data: Record<string, unknown> } => ({ id: `f-auto-dg${PLUGIN_VERSION.replace(/\./g, '')}`, collection: 'fixes', data: { category: FIX_CATEGORY, date, kind: 'hook', status: 'landed', title: `dispatch-guard ${PLUGIN_VERSION} (auto)`, detail: `dispatch-guard ${PLUGIN_VERSION} first deep turn ${date} ${time} SGT: ${CHANGELOG_LINE}`, plugin_version: PLUGIN_VERSION, auto: true } })
@@ -2764,6 +2764,9 @@ export const register: Register = on => {
       submitted = false
       jTurn = !fromGuard && isJ(e.text)
       if (jTurn) askPush(asks, asked) // 0.6.30
+      // 0.6.41: a J turn whose prompt never set the reply wait (no prompt.submit event, or an origin kind outside J_ORIGINS, as in scheduled runs)
+      // starts its wait here, so final_ms and its lat_<tier> count it like turn_count does (14-15 Nov rows: turn_count 1, final_count 0, lat n=0).
+      if (jTurn && replyWaits.length === 0) { lastJAt = turnT0; replyWaits = [turnT0]; replyTools = [toolN]; replyTiers = [classifyTier(e.text, attachN(e))]; checkAcc = 0; newGroup = true }
       styleOwedNow = jTurn && styleOwed // the line carried in with this prompt: this turn owes the Correction:
       if (styleOwed && jTurn) styleOwed = false
       await close($, finished(e.text))
