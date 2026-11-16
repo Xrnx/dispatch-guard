@@ -4015,7 +4015,9 @@ test('W45 Stop-hook continuation: what the blocked turn sent mid-turn (SendUserM
   const fb = 'Stop hook feedback:\nDeep mode: this reply reached J without a check_reply PASS.'
   await $.prompt.submit({ text: fb } as any)
   await $.turn.start({ text: fb, turnId: 'w2' } as any)
-  await $.tool.call(chk('Breakdown sent: about S$4.50 a day.', { evidence: 'EV' }))
+  const n0 = judge.calls.length
+  const rr = await $.tool.call(chk('Breakdown sent: about S$4.50 a day.', { evidence: 'EV' })) as any
+  console.log('W45DBG', n0, judge.calls.length, String(rr.result).slice(0,300), String(judge.calls[judge.calls.length - 1].prompt).match(/Already sent[\s\S]{0,300}/)?.[0])
   expect(String(judge.calls[judge.calls.length - 1].prompt)).toContain(`Already sent to J this turn: ${table}`)
 })
 
