@@ -2,7 +2,7 @@
 
 One line per version, newest first. Every version bump adds its line here in the same commit. Sources: version comments in hooks/*.ts, README 0.6.x sections, git log. "no record" = no comment, README text or commit names that version.
 
-- 0.6.47: a Stop-hook continuation now shows the judge what the blocked turn already sent mid-turn, so a short wrap-up is not failed for leaving out an answer J already has.
+- 0.6.47: when a message already reached J this turn, the judge now sees it and checks a later wrap-up only for what J still lacks, so a short wrap-up is not failed for leaving out an answer J already has.
 - 0.6.46: each unchecked reply is logged with reply and ask snippets (Stop and turn end), so the unchecked count can be split by cause.
 - 0.6.45: a refused SendUserMessage can still be shown to J by the app, so the refusal no longer tells the model to resend the same text; it says to send only what changed.
 - 0.6.44: dark check samples store the reply snippet they judged instead of the check message, so silent checks can be reviewed.
