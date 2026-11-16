@@ -41,15 +41,15 @@ C="$t/clean"; mkdir -p "$C"; printf -- '---\nname: preferences\n---\n- plain rul
 out2="$("$here/tools/maintenance-lint" --memory-dir "$C" --memory-index "$t/index.txt")"; rc2=$?
 ok "clean exit 0 + RESULT: OK" "[ $rc2 = 0 ] && [ \"\$(echo \"\$out2\" | tail -1)\" = 'RESULT: OK' ]"
 # RESULT line on the shell tools
-d="$t/denylist.txt"; echo 'zz'"qqxx" > "$d"; mkdir "$t/tree"; echo hello > "$t/tree/a.txt"
-o3="$(DG_DENYLIST="$d" "$here/tools/confidentiality-scan.sh" "$t/tree" 2>/dev/null)"
+mkdir "$t/tree"; echo hello > "$t/tree/a.txt"
+o3="$("$here/tools/confidentiality-scan.sh" "$t/tree" 2>/dev/null)"
 ok "scan clean ends RESULT: OK" "[ \"\$(echo \"\$o3\" | tail -1)\" = 'RESULT: OK' ]"
-echo 'zz'"qqxx" > "$t/tree/b.txt"
-o4="$(DG_DENYLIST="$d" "$here/tools/confidentiality-scan.sh" "$t/tree" 2>/dev/null)"
+echo 'jsmith@''corp-mail.net' > "$t/tree/b.txt"
+o4="$("$here/tools/confidentiality-scan.sh" "$t/tree" 2>/dev/null)"
 ok "scan hit ends RESULT: FAILED" "[ \"\$(echo \"\$o4\" | tail -1)\" = 'RESULT: FAILED (exit 1)' ]"
 o5="$("$here/tools/rulepack-publish.sh" /nonexistent.json 2>/dev/null)"
 ok "rulepack-publish failure ends RESULT: FAILED" "[ \"\$(echo \"\$o5\" | tail -1)\" = 'RESULT: FAILED (exit 1)' ]"
-o6="$(DG_DENYLIST="$d" "$here/tools/build-zip.sh" "$t/x.zip" 2>/dev/null)"
+o6="$("$here/tools/build-zip.sh" "$t/x.zip" 2>/dev/null)"
 ok "build-zip (clean) ends RESULT: OK once" "[ \"\$(echo \"\$o6\" | tail -1)\" = 'RESULT: OK' ] && [ \"\$(echo \"\$o6\" | grep -c '^RESULT:')\" = 1 ]"
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ] && echo "RESULT: OK" || { echo "RESULT: FAILED ($fail issues)"; exit 1; }

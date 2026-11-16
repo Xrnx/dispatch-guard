@@ -2,6 +2,7 @@
 
 One line per version, newest first. Every version bump adds its line here in the same commit. Sources: version comments in hooks/*.ts, README 0.6.x sections, git log. "no record" = no comment, README text or commit names that version.
 
+- 0.6.43: names checked absent from all repository history (no rewrite needed); the static name-list scan is dropped from the build tools (email and home-folder scans kept).
 - 0.6.42: merges the two parallel 0.6.41 builds (first-draft Efficiency/Leap prompt; Scoreboard flush drains rows the board already holds).
 - 0.6.41: the check_reply description asks for the Efficiency and Leap lines in the first draft (missing footers were 75 of 121 rule-check fails, 8 to 15 Nov), checks unchanged; and relayed Scoreboard rows that the board already holds no longer block the queue: a refusal naming an existing doc counts that one-shot row as delivered and the next relay follows at once, so the stuck batch drains.
 - 0.6.40: judge runs at medium effort with a 12 s timeout and adds rule wording for untested consequences, unweighed fixes and guessed causes; on the test set false alarms 28 to 24 of 78, J-case catch 10 to 13 of 24, held-out J cases 8 to 12 of 15.

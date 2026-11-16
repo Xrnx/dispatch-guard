@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the release zip: confidentiality scan first (fails the build on any hit), then a single top-level dispatch-guard/ folder.
+# Build the release zip: confidentiality scan (email + home-folder) first (fails the build on any hit), then a single top-level dispatch-guard/ folder.
 # Usage: tools/build-zip.sh <out.zip>
 set -euo pipefail
 # RESULT line (0.6.15): the last stdout line is "RESULT: OK" or "RESULT: FAILED (exit N)", so a "done" claim can be checked. Nested calls set DG_NO_RESULT.
