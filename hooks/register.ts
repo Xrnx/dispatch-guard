@@ -2135,9 +2135,9 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.42'
+export const PLUGIN_VERSION = '0.6.44'
 // 0.6.29 version row: this version's CHANGELOG line (tools/build-zip.sh fails unless CHANGELOG.md has "- <PLUGIN_VERSION>: <CHANGELOG_LINE>").
-export const CHANGELOG_LINE = 'merges the two parallel 0.6.41 builds (first-draft Efficiency/Leap prompt; Scoreboard flush drains rows the board already holds).'
+export const CHANGELOG_LINE = 'dark check samples store the reply snippet they judged instead of the check message, so silent checks can be reviewed.'
 export const FIX_CATEGORY = 'unchecked reply'
 export const VERSION_ROW_KEY = 'fixesRowVersion' // the last PLUGIN_VERSION whose fixes row was queued
 export const versionRow = (date: string, time: string): { id: string; collection: string; data: Record<string, unknown> } => ({ id: `f-auto-dg${PLUGIN_VERSION.replace(/\./g, '')}`, collection: 'fixes', data: { category: FIX_CATEGORY, date, kind: 'hook', status: 'landed', title: `dispatch-guard ${PLUGIN_VERSION} (auto)`, detail: `dispatch-guard ${PLUGIN_VERSION} first deep turn ${date} ${time} SGT: ${CHANGELOG_LINE}`, plugin_version: PLUGIN_VERSION, auto: true } })
@@ -2154,6 +2154,7 @@ export async function queueVersionRow($: EngineInterface): Promise<boolean> {
 type Stats = { date: string; prompts: number; firstPass: number; rounds: number; unchecked: number; uu: number; att?: string; so?: string; jc: number; jok: number; jun: number; tin: number; tout: number; tcache: number; epoch?: string; eRounds: number; eFail: boolean; closed?: string; fc: Record<string, number>; dh: Record<string, number>; ds: Record<string, string[]>; tms: number; tn: number; tmax: number; jms: number; crms: number; fs: number[]; fl: number; frms: number; frn: number; frmax: number; fims: number; cms: number; eT0?: number; eT1?: number; ft?: number[]; ff?: number[]; fck?: number[]; ftr?: string[]; flt?: number; flw?: number; lb?: Record<string, LatB>; pf?: number; sbj?: number; rw?: number }
 export type StatsRow = { source: 'deep-stats'; date: string; session: string; plugin_version: string; prompts_judged: number; first_draft_pass: number; unchecked: number; unchecked_unattended: number; attended: string; session_origin: string; rounds_total: number; judge_calls: number; judge_ok: number; judge_unavailable: number; tokens_in: number; tokens_out: number; tokens_cache: number; fail_checks: Record<string, number>; dark_hits: Record<string, number>; dark_samples: Record<string, string[]>; turn_ms_total: number; turn_count: number; turn_ms_max: number; judge_ms_total: number; checker_rounds_ms_total: number; final_ms_total: number; final_count: number; final_ms_max: number; first_ms_total: number; check_ms_total: number; post_first_ms_total: number; stopped_by_j: number; reworded_sends: number; lat_ack: LatB; lat_question: LatB; lat_task1: LatB; lat_taskN: LatB }
 // 0.6.24 speed meter: wall ms turn.start -> turn.complete of deep J-prompt turns (total, count, max), judge call ms, and checker rounds ms (first to last check_reply round end, per prompt; a one-round prompt adds 0). Counts only.
+// 0.6.44: samples are a whitespace-collapsed snippet (first ~300 chars, stored capped at 160 by readStats/trimSamples) of the reply text a dark check judged, never the check message.
 // 0.6.23: dark-check would-be hits per id (dark_hits) and the last 3 snippets each (dark_samples, whole field <= 3000 chars), so a reviewer can tell real misses from false alarms. Snippets are reply text or the check's own message only.
 export const DARK_SAMPLES_CAP = 3000
 const trimSamples = (ds: Record<string, string[]>): Record<string, string[]> => {
@@ -2170,7 +2171,7 @@ const readStats = async ($: EngineInterface, sid: string, date: string): Promise
   const v = await Promise.resolve().then(() => $.store.get(`${STATS_KEY}:${sid}`)).catch(() => undefined) as Partial<Stats> | undefined
   const fresh = v?.date === date
   const n = (x: unknown): number => (fresh ? Number(x) || 0 : 0)
-  return { date, prompts: n(v?.prompts), firstPass: n(v?.firstPass), rounds: n(v?.rounds), unchecked: n(v?.unchecked), uu: n(v?.uu), att: typeof v?.att === 'string' ? v.att : undefined, so: typeof v?.so === 'string' ? v.so : undefined, jc: n(v?.jc), jok: n(v?.jok), jun: n(v?.jun), tin: n(v?.tin), tout: n(v?.tout), tcache: n(v?.tcache), epoch: v?.epoch, eRounds: Number(v?.eRounds) || 0, eFail: v?.eFail === true, closed: v?.closed, tms: n(v?.tms), tn: n(v?.tn), tmax: n(v?.tmax), jms: n(v?.jms), crms: n(v?.crms), fs: fresh && Array.isArray(v?.fs) ? v.fs.map(Number).filter(Number.isFinite).slice(-200) : [], fl: n(v?.fl), frms: n(v?.frms), frn: n(v?.frn), frmax: n(v?.frmax), fims: n(v?.fims), cms: n(v?.cms), sbj: n(v?.sbj), rw: n(v?.rw), ...latRead(v, fresh), eT0: Number(v?.eT0) || undefined, eT1: Number(v?.eT1) || undefined, fc: fresh && v?.fc && typeof v.fc === 'object' ? Object.fromEntries(Object.entries(v.fc).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {}, dh: fresh && v?.dh && typeof v.dh === 'object' ? Object.fromEntries(Object.entries(v.dh).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {}, ds: fresh && v?.ds && typeof v.ds === 'object' ? Object.fromEntries(Object.entries(v.ds).map(([k, a]) => [k, Array.isArray(a) ? a.map(x => String(x).slice(0, 160)) : []])) : {} }
+  return { date, prompts: n(v?.prompts), firstPass: n(v?.firstPass), rounds: n(v?.rounds), unchecked: n(v?.unchecked), uu: n(v?.uu), att: typeof v?.att === 'string' ? v.att : undefined, so: typeof v?.so === 'string' ? v.so : undefined, jc: n(v?.jc), jok: n(v?.jok), jun: n(v?.jun), tin: n(v?.tin), tout: n(v?.tout), tcache: n(v?.tcache), epoch: v?.epoch, eRounds: Number(v?.eRounds) || 0, eFail: v?.eFail === true, closed: v?.closed, tms: n(v?.tms), tn: n(v?.tn), tmax: n(v?.tmax), jms: n(v?.jms), crms: n(v?.crms), fs: fresh && Array.isArray(v?.fs) ? v.fs.map(Number).filter(Number.isFinite).slice(-200) : [], fl: n(v?.fl), frms: n(v?.frms), frn: n(v?.frn), frmax: n(v?.frmax), fims: n(v?.fims), cms: n(v?.cms), sbj: n(v?.sbj), rw: n(v?.rw), ...latRead(v, fresh), eT0: Number(v?.eT0) || undefined, eT1: Number(v?.eT1) || undefined, fc: fresh && v?.fc && typeof v.fc === 'object' ? Object.fromEntries(Object.entries(v.fc).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {}, dh: fresh && v?.dh && typeof v.dh === 'object' ? Object.fromEntries(Object.entries(v.dh).map(([k, c]) => [k, Number(c) || 0]).filter(([, c]) => (c as number) > 0)) : {}, ds: fresh && v?.ds && typeof v.ds === 'object' ? Object.fromEntries(Object.entries(v.ds).map(([k, a]) => [k, Array.isArray(a) ? a.map(x => String(x).slice(0, 300)) : []])) : {} }
 }
 // One or more dark would-be hits ({id, snip}); live checks never reach here. Refreshes today's row when it already exists.
 export async function statsDark($: EngineInterface, hits: { id: string; snip?: string }[]): Promise<void> {
@@ -2179,7 +2180,7 @@ export async function statsDark($: EngineInterface, hits: { id: string; snip?: s
     const sid = String(await $.session.id()), date = sgtIso(await nowMs($)).slice(0, 10), st = await readStats($, sid, date)
     for (const h of hits) {
       st.dh[h.id] = (st.dh[h.id] ?? 0) + 1
-      const snip = String(h.snip ?? '').replace(/\s+/g, ' ').trim().slice(0, 160)
+      const snip = String(h.snip ?? '').replace(/\s+/g, ' ').trim().slice(0, 300)
       st.ds[h.id] = [...(st.ds[h.id] ?? []), ...(snip === '' ? [] : [snip])].slice(-3)
     }
     st.ds = trimSamples(st.ds)
@@ -2376,7 +2377,7 @@ export async function deepGate($: EngineInterface, said: string, facts: DeepFact
     const log = await $.store.get(DENY_LOG_KEY)
     await $.store.set(DENY_LOG_KEY, [...(Array.isArray(log) ? log : []), { time: sgtIso(await nowMs($)), session: await $.session.id(), n: 0, dark: true, checks: soft.map(x => x.id) }].slice(-500))
   }).catch(() => undefined)
-  await statsDark($, soft.map(x => ({ id: x.id, snip: x.text })))
+  await statsDark($, soft.map(x => ({ id: x.id, snip: said }))) // 0.6.44: the reply text judged, not the check message
   const key = await failKey($)
   // 0.6.17 caps: any hard problem fails up to denyCap(); a judge problem tagged (a) contradicted / (b) unsupported claim, or Efficiency-none after such a round, gets one more round.
   const hard = probs.filter(x => x.weak !== true)
@@ -2831,7 +2832,7 @@ export const register: Register = on => {
         sg = sourceGate(text, String(x.evidence ?? ''))
         if (sg.length > 0 && DARK.has(SOURCE_GATE_ID) && gateMode < 2) { // dark: logged as a would-be hit, never denying
           await Promise.resolve().then(async () => { const log = await $.store.get(DENY_LOG_KEY); await $.store.set(DENY_LOG_KEY, [...(Array.isArray(log) ? log : []), { time: sgtIso(await nowMs($)), session: await $.session.id(), n: 0, dark: true, checks: [SOURCE_GATE_ID] }].slice(-500)) }).catch(() => undefined)
-          await statsDark($, [{ id: SOURCE_GATE_ID, snip: sg[0] }])
+          await statsDark($, [{ id: SOURCE_GATE_ID, snip: text }])
           sg = []
         }
       }
@@ -2851,7 +2852,7 @@ export const register: Register = on => {
       const recheck = stopBlocked.has(replyHash(text))
       // 0.6.29: a Stop re-check (J already has the text) failing only on footer lines is logged to stats, never sent to J as a correction.
       if (recheck && g.probs.length > 0 && footerOnly(g.probs)) {
-        await statsDark($, g.probs.map(p => ({ id: `recheck-footer:${p.id}`, snip: p.text.slice(0, 160) })))
+        await statsDark($, g.probs.map(p => ({ id: `recheck-footer:${p.id}`, snip: text })))
         stopChainDone = true
         finalPassed.add(replyHash(text))
         return { result: `PASS ${replyHash(text)} (Stop re-check: footer-line gaps only, logged; J already has the reply. End the turn with no text; send J nothing about it.)` }
@@ -2933,7 +2934,7 @@ export const register: Register = on => {
     if (e.agentId === undefined && SAVE_TOOL.test(e.tool) && !savePass && sendOk && !handoffPath((e as Record<string, unknown>).path) && num('save-gate', 'enforce') > 0 && (await readMode($, mode)) === 'deep') {
       const live2 = num('save-gate', 'enforce') >= 2
       await Promise.resolve().then(async () => { const log = await $.store.get(DENY_LOG_KEY); await $.store.set(DENY_LOG_KEY, [...(Array.isArray(log) ? log : []), { time: sgtIso(await nowMs($)), session: await $.session.id(), n: 0, ...(live2 ? {} : { dark: true }), checks: ['save-gate'] }].slice(-500)) }).catch(() => undefined)
-      if (!live2) await statsDark($, [{ id: 'save-gate', snip: 'rule save with no earlier check_reply PASS this turn' }])
+      if (!live2) await statsDark($, [{ id: 'save-gate', snip: (() => { const y = e as Record<string, unknown>; return [y.path, y.content, y.new_str, y.new_string, y.text].map(v => typeof v === 'string' ? v : '').join(' ') })() }])
       if (live2) return { deny: msg('save-gate') }
     }
     const notes: string[] = []
@@ -3280,7 +3281,7 @@ export const register: Register = on => {
     void settle($, facts, refired)
     if (darkLogged.length > 0) {
       void hookLog($, darkLogged, 1)
-      await statsDark($, darkLogged.map(id => ({ id, snip: id === 'stop-writes' ? writeClaims(said, asked)[0] : id === 'stop-figures' ? unsourcedFigures(said, `${corpus} ${turnCorpus}`, asked).slice(0, 4).join(', ') : 'three or more bullets with a date or amount and no source' })))
+      await statsDark($, darkLogged.map(id => ({ id, snip: said })))
     }
     void hookLog($, endIds, 1) // both join the pending chain now, in this order
     if (all === '') return ran
