@@ -2046,6 +2046,8 @@ test('deep: a known-bad message is denied with the exact problem; a clean one pa
   expect(r.deny).toMatch(/call check_reply first/)
   expect(r.deny).toMatch(/unbacked absolute claim/)
   expect(r.deny).toMatch(/1\/2/)
+  expect(r.deny).toMatch(/never the same text again/) // 0.6.45: a refused send may still be shown to J,
+  expect(r.deny).not.toMatch(/resend/i)
   const ok = await $.tool.call(send(CLEAN)) as any
   expect(ok.deny).toBeUndefined()
 })
@@ -3030,7 +3032,7 @@ test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft pas
   expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
   expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 1, judge_ok: 1, judge_unavailable: 0, tokens_in: 100, tokens_out: 20, tokens_cache: 50 })
   expect(Object.values(d.fail_checks).reduce((a: number, b: any) => a + b, 0)).toBeGreaterThanOrEqual(2) // 0.6.22: the two failed BADC rounds are counted by check id
-  expect(PLUGIN_VERSION).toBe('0.6.44')
+  expect(PLUGIN_VERSION).toBe('0.6.45')
 })
 test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
   const { mem } = deepEngine(on, true)
@@ -4309,10 +4311,10 @@ test('0.6.29 fix d: the first deep J turn on a new version queues one Scoreboard
   await $.turn.complete(end('d2', 'Noted.'))
   const rows = ((mem.corrLog as any[]) ?? []).filter(r => r.collection === 'fixes')
   expect(rows.length).toBe(1)
-  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0644', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.44' } })
+  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0645', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.45' } })
   expect(rows[0].data.detail).toContain(CHANGELOG_LINE)
-  expect(mem[VERSION_ROW_KEY]).toBe('0.6.44')
-  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.44 (auto)')
+  expect(mem[VERSION_ROW_KEY]).toBe('0.6.45')
+  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.45 (auto)')
 })
 
 // 0.6.30 cross-turn bleed (live 13 Nov 12:37-12:39 SGT): rule (d) cited "Are you done with all fixes?" (12:35, answered) against later asks.
