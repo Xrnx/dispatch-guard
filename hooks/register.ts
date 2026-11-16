@@ -2135,9 +2135,9 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.46'
+export const PLUGIN_VERSION = '0.6.47'
 // 0.6.29 version row: this version's CHANGELOG line (tools/build-zip.sh fails unless CHANGELOG.md has "- <PLUGIN_VERSION>: <CHANGELOG_LINE>").
-export const CHANGELOG_LINE = 'each unchecked reply is logged with reply and ask snippets (Stop and turn end), so the unchecked count can be split by cause.'
+export const CHANGELOG_LINE = 'a Stop-hook continuation now shows the judge what the blocked turn already sent mid-turn, so a short wrap-up is not failed for leaving out an answer J already has.'
 export const FIX_CATEGORY = 'unchecked reply'
 export const VERSION_ROW_KEY = 'fixesRowVersion' // the last PLUGIN_VERSION whose fixes row was queued
 export const versionRow = (date: string, time: string): { id: string; collection: string; data: Record<string, unknown> } => ({ id: `f-auto-dg${PLUGIN_VERSION.replace(/\./g, '')}`, collection: 'fixes', data: { category: FIX_CATEGORY, date, kind: 'hook', status: 'landed', title: `dispatch-guard ${PLUGIN_VERSION} (auto)`, detail: `dispatch-guard ${PLUGIN_VERSION} first deep turn ${date} ${time} SGT: ${CHANGELOG_LINE}`, plugin_version: PLUGIN_VERSION, auto: true } })
@@ -2562,7 +2562,7 @@ export const register: Register = on => {
   // 0.6.21: the judge also sees what SendUserMessage already told J this turn, so a final reply is not failed for 'not answering' a question a mid-turn message answered.
   const sentEvidence = (ev: string): string => {
     const auto = [...agentLaunches.slice(-15).map(a => `launched ${a}`), ...turnSends.slice(-15), ...turnActs.slice(-30)]
-    const already = [...delivered, ...sentText]
+    const already = [...new Set([...priorFacing, ...delivered, ...sentText])] // W45: a Stop-hook continuation also sees what the blocked turn sent mid-turn
     return `${ev}${already.length === 0 ? '' : `\nAlready sent to J this turn: ${already.join('\n---\n')}`}${auto.length === 0 ? '' : `\nAuto-evidence: ${auto.join('; ')}`}`.slice(-20_000)
   }
   const numbered = (probs: Problem[]): string => probs.map((x, i) => `${i + 1}) ${x.text}`).join(' ')

@@ -3032,7 +3032,7 @@ test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft pas
   expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
   expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 1, judge_ok: 1, judge_unavailable: 0, tokens_in: 100, tokens_out: 20, tokens_cache: 50 })
   expect(Object.values(d.fail_checks).reduce((a: number, b: any) => a + b, 0)).toBeGreaterThanOrEqual(2) // 0.6.22: the two failed BADC rounds are counted by check id
-  expect(PLUGIN_VERSION).toBe('0.6.46')
+  expect(PLUGIN_VERSION).toBe('0.6.47')
 })
 test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
   const { mem } = deepEngine(on, true)
@@ -4002,6 +4002,23 @@ test('0.6.25 Stop-hook continuation: a draft repeating what J already saw fails 
   expect(((await $.tool.call(chk(first))) as any).result).not.toMatch(/Stop-hook continuation/)
 })
 
+test('W45 Stop-hook continuation: what the blocked turn sent mid-turn (SendUserMessage) reaches the judge as already sent', async ($, on) => {
+  const { judge } = deepEngine(on, false)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  judge.reply = JUDGE_OK
+  const table = 'Total: about S$4.50 a day. Calmer 2.13, Xandro 0.79, creatine 0.21.'
+  await jTurnStart($, 'calculate daily cost of my stack', 'w1')
+  await $.tool.call({ tool: 'Read', file_path: '/x' } as any)
+  expect(((await $.tool.call(chk(table))) as any).result).toMatch(/^PASS /)
+  await $.tool.call(send(table))
+  await $.turn.complete(end('w1', 'Breakdown sent: about S$4.50 a day.'))
+  const fb = 'Stop hook feedback:\nDeep mode: this reply reached J without a check_reply PASS.'
+  await $.prompt.submit({ text: fb } as any)
+  await $.turn.start({ text: fb, turnId: 'w2' } as any)
+  await $.tool.call(chk('Breakdown sent: about S$4.50 a day.'))
+  expect(String(judge.calls[judge.calls.length - 1].prompt)).toContain(`Already sent to J this turn: ${table}`)
+})
+
 test('0.6.25 the guard\'s own suggested Efficiency wording passes its own checks (efficiency-line, efficiency-none, efficiency-fix, closure-line)', () => {
   const t = '**Efficiency:** the first draft lacked the agent count.'
   expect(efficiencyFix(t, false)).toBe(false)
@@ -4315,10 +4332,10 @@ test('0.6.29 fix d: the first deep J turn on a new version queues one Scoreboard
   await $.turn.complete(end('d2', 'Noted.'))
   const rows = ((mem.corrLog as any[]) ?? []).filter(r => r.collection === 'fixes')
   expect(rows.length).toBe(1)
-  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0646', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.46' } })
+  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0647', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.47' } })
   expect(rows[0].data.detail).toContain(CHANGELOG_LINE)
-  expect(mem[VERSION_ROW_KEY]).toBe('0.6.46')
-  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.46 (auto)')
+  expect(mem[VERSION_ROW_KEY]).toBe('0.6.47')
+  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.47 (auto)')
 })
 
 // 0.6.30 cross-turn bleed (live 13 Nov 12:37-12:39 SGT): rule (d) cited "Are you done with all fixes?" (12:35, answered) against later asks.
