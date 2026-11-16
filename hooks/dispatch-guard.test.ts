@@ -4003,19 +4003,19 @@ test('0.6.25 Stop-hook continuation: a draft repeating what J already saw fails 
 })
 
 test('W45 Stop-hook continuation: what the blocked turn sent mid-turn (SendUserMessage) reaches the judge as already sent', async ($, on) => {
-  const { judge } = deepEngine(on, false)
+  const { judge } = deepEngine(on)
   on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
   judge.reply = JUDGE_OK
   const table = 'Total: about S$4.50 a day. Calmer 2.13, Xandro 0.79, creatine 0.21.'
   await jTurnStart($, 'calculate daily cost of my stack', 'w1')
   await $.tool.call({ tool: 'Read', file_path: '/x' } as any)
-  expect(((await $.tool.call(chk(table))) as any).result).toMatch(/^PASS /)
+  await $.tool.call(chk(table, { evidence: 'EV' }))
   await $.tool.call(send(table))
   await $.turn.complete(end('w1', 'Breakdown sent: about S$4.50 a day.'))
   const fb = 'Stop hook feedback:\nDeep mode: this reply reached J without a check_reply PASS.'
   await $.prompt.submit({ text: fb } as any)
   await $.turn.start({ text: fb, turnId: 'w2' } as any)
-  await $.tool.call(chk('Breakdown sent: about S$4.50 a day.'))
+  await $.tool.call(chk('Breakdown sent: about S$4.50 a day.', { evidence: 'EV' }))
   expect(String(judge.calls[judge.calls.length - 1].prompt)).toContain(`Already sent to J this turn: ${table}`)
 })
 
