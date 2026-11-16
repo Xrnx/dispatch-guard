@@ -3,7 +3,7 @@ import { CARD } from './orchestrator-card'
 import { askPush, askAnswered, buildAsk, NO_NEW_ASK, EARLIER_ASKS, ASK_DONE_MAX, type AskState } from './register'
 import { validatePack, bundledPackJson, BUNDLED_VERSION, mergePack, bundledRules } from './rulepack'
 import { closureMisses, evidenceFirstHit, evidenceCall, realChange, deepCategory, jRow, corrRow, prefilterLines, repeatedLines } from './register'
-import { MISSING_LINE, sessionBlock, SESSION_INDEX_KEY, KEEP_SESSIONS, problemLabel, SET_RULES_TOOL, RULES_KEY, deepLine, setRules, cleanProblem, deepRow, tokensOf, JUDGE_TOKENS_KEY, judgeRules, skipJudge, denyCap, modeCommand, deepProblems, missingEfficiency, deepMissingLeap, replyHash, CHECK_TOOL, MODE_KEY, DENY_LOG_KEY, CAUGHT_KEY, JUDGE_KEY, JUDGE_RULES, parseJudge, DEEP_LINE, DEEP_DARK, CHECK_SPEC, stubOutput, undefinedLabels, questionOnly, redrafts, missingLeap, uncomputed, numbersIn, nonPreventions, startsWork, answersFirst, scopePhrases, asksJ, buriedAsks, promises, parkedFix, foregroundWait, offers, RELAY_AT, longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, jText, reasks, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL, clockStamp, danglingRefs, isJ, knowableAsks, inputAsk, workMade, draftGap, missUnlanded, fixEvidence, settleRow, absoluteClaims, openQuestions, PLUGIN_VERSION, sourceGate, efficiencyFix, STATS_KEY, statsRow, DARK_SAMPLES_CAP, STOP_RECHECK, STOP_REWORDED, SEND_JUDGE, SEND_ROUTE, ROUTE_LINE, statsJudge, STYLE_PROBLEM, inputDigest, keywordList, stateClaim, stopShort, footerOnly, NO_OUTPUT_NUDGE, versionRow, VERSION_ROW_KEY, CHANGELOG_LINE, classifyTier, askCount, wordCount, judgeLetters } from './register'
+import { MISSING_LINE, sessionBlock, SESSION_INDEX_KEY, KEEP_SESSIONS, problemLabel, SET_RULES_TOOL, RULES_KEY, deepLine, setRules, cleanProblem, deepRow, tokensOf, JUDGE_TOKENS_KEY, judgeRules, skipJudge, denyCap, modeCommand, deepProblems, missingEfficiency, deepMissingLeap, replyHash, CHECK_TOOL, MODE_KEY, DENY_LOG_KEY, CAUGHT_KEY, JUDGE_KEY, JUDGE_RULES, parseJudge, DEEP_LINE, DEEP_DARK, CHECK_SPEC, stubOutput, undefinedLabels, questionOnly, redrafts, missingLeap, uncomputed, numbersIn, nonPreventions, startsWork, answersFirst, scopePhrases, asksJ, buriedAsks, promises, parkedFix, foregroundWait, offers, RELAY_AT, longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, jText, reasks, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL, clockStamp, danglingRefs, isJ, knowableAsks, inputAsk, workMade, draftGap, missUnlanded, fixEvidence, settleRow, absoluteClaims, openQuestions, PLUGIN_VERSION, sourceGate, efficiencyFix, STATS_KEY, statsRow, DARK_SAMPLES_CAP, STOP_RECHECK, STOP_REWORDED, SEND_JUDGE, SEND_ROUTE, ROUTE_LINE, statsJudge, STYLE_PROBLEM, inputDigest, keywordList, stateClaim, stopShort, footerOnly, NO_OUTPUT_NUDGE, versionRow, VERSION_ROW_KEY, CHANGELOG_LINE, classifyTier, askCount, wordCount, judgeLetters, ANSWERED_NOTE } from './register'
 
 const TURN = /4th tool call this turn/
 const BASH = /Foreground Bash builds\/tests\/installs\/clones\/waits/
@@ -4016,8 +4016,11 @@ test('W45 Stop re-check: a wrap-up after a mid-turn SendUserMessage is judged wi
   const n0 = judge.calls.length
   const rr = await $.tool.call(chk(wrap, { evidence: 'EV' })) as any
   const p = String(judge.calls[judge.calls.length - 1].prompt)
-  console.log('W45DBG', String(r1.block ?? '').slice(0, 60), n0, judge.calls.length, String(rr.result).slice(0, 200), /Already sent to J this turn: Total/.test(p), /already delivered/.test(p))
   expect(p).toContain(`Already sent to J this turn: ${table}`)
+  expect(p).toContain(ANSWERED_NOTE)
+  expect(n0).toBeLessThan(judge.calls.length)
+  expect(r1.block).toBeDefined()
+  expect(String(rr.result)).toMatch(/^PASS /)
 })
 
 test('0.6.25 the guard\'s own suggested Efficiency wording passes its own checks (efficiency-line, efficiency-none, efficiency-fix, closure-line)', () => {

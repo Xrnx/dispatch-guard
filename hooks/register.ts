@@ -2853,7 +2853,7 @@ export const register: Register = on => {
 
       // 0.6.22: cheap rule checks run first; a draft that already fails one comes back at once, without the slower judge call.
       const ruleFirst = !atCap && deepProblems(text, f).some(p => !logOnly(p.id) && !DEEP_DARK.has(p.id))
-      const jr = pre.length > 0 || ruleFirst || skipJudge(text, ja.cur) ? undefined : await judgeReply($, text, ja.ask, sentEvidence(String(x.evidence ?? '')), turnResults, f)
+      const jr = pre.length > 0 || ruleFirst || skipJudge(text, ja.cur) ? undefined : await judgeReply($, text, askNote(ja.ask, sentText.length + priorFacing.length > 0), sentEvidence(String(x.evidence ?? '')), turnResults, f)
       const g = await deepGate($, text, f, denied, epoch, jr === undefined || jr.status === 'unavailable' ? undefined : { problems: jr.problems.map(t => ({ id: 'judge', text: `judge: ${t}` })) }, atCap && jr === undefined, pre, mc)
       denied = g.denied
       const recheck = stopBlocked.has(replyHash(text))
