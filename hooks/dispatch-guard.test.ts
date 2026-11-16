@@ -3030,7 +3030,7 @@ test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft pas
   expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
   expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 1, judge_ok: 1, judge_unavailable: 0, tokens_in: 100, tokens_out: 20, tokens_cache: 50 })
   expect(Object.values(d.fail_checks).reduce((a: number, b: any) => a + b, 0)).toBeGreaterThanOrEqual(2) // 0.6.22: the two failed BADC rounds are counted by check id
-  expect(PLUGIN_VERSION).toBe('0.6.43')
+  expect(PLUGIN_VERSION).toBe('0.6.44')
 })
 test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
   const { mem } = deepEngine(on, true)
@@ -3653,7 +3653,7 @@ test('0.6.23 dark_hits: a dark check hit accumulates per id with samples; a live
   const d1 = statRows(mem)[0].data
   expect(d1.dark_hits['stop-sources']).toBeGreaterThanOrEqual(1)
   expect(d1.dark_samples['stop-sources'].length).toBeGreaterThanOrEqual(1)
-  expect(d1.dark_samples['stop-sources'].every((x: string) => x.length <= 160)).toBe(true)
+  expect(d1.dark_samples['stop-sources'].every((x: string) => x.length <= 300)).toBe(true)
   const n1 = d1.dark_hits['stop-sources']
   await darkTurn($, on, 't2')
   expect(statRows(mem)[0].data.dark_hits['stop-sources']).toBeGreaterThan(n1)
@@ -3667,6 +3667,22 @@ test('0.6.23 dark_hits: a dark check hit accumulates per id with samples; a live
   expect(d.fail_checks['leap-line']).toBeGreaterThanOrEqual(1)
   expect(d.dark_hits['leap-line']).toBeUndefined()
   expect(d.dark_samples['leap-line']).toBeUndefined()
+})
+test('0.6.44 dark_samples hold the reply snippet that was judged, not the check message', async ($, on) => {
+  const { mem } = deepEngine(on, true)
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await darkTurn($, on, 't1')
+  const ds = statRows(mem)[0].data.dark_samples as Record<string, string[]>
+  const ids = Object.keys(ds).filter(i => ds[i].length > 0)
+  expect(ids.length).toBeGreaterThanOrEqual(1)
+  for (const i of ids) for (const x of ds[i]) {
+    expect(x).toContain('paid S$500 on 3 March 2026') // the reply text
+    expect(x).not.toContain('three or more bullets') // never the check message
+    expect(x).not.toContain('rule save with no earlier')
+    expect(x).not.toMatch(/\n/)
+    expect(x.length).toBeLessThanOrEqual(300)
+  }
+  expect(ids).toContain('stop-sources')
 })
 test('0.6.23 dark_samples: last 3 per id, each <= 160 chars, whole field capped at 3000 chars', () => {
   // statsRow trims via the same helper the writer uses
@@ -4293,10 +4309,10 @@ test('0.6.29 fix d: the first deep J turn on a new version queues one Scoreboard
   await $.turn.complete(end('d2', 'Noted.'))
   const rows = ((mem.corrLog as any[]) ?? []).filter(r => r.collection === 'fixes')
   expect(rows.length).toBe(1)
-  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0643', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.43' } })
+  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0644', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.44' } })
   expect(rows[0].data.detail).toContain(CHANGELOG_LINE)
-  expect(mem[VERSION_ROW_KEY]).toBe('0.6.43')
-  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.43 (auto)')
+  expect(mem[VERSION_ROW_KEY]).toBe('0.6.44')
+  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.44 (auto)')
 })
 
 // 0.6.30 cross-turn bleed (live 13 Nov 12:37-12:39 SGT): rule (d) cited "Are you done with all fixes?" (12:35, answered) against later asks.
