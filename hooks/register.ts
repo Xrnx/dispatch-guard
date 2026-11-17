@@ -2135,9 +2135,9 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.44'
+export const PLUGIN_VERSION = '0.6.47'
 // 0.6.29 version row: this version's CHANGELOG line (tools/build-zip.sh fails unless CHANGELOG.md has "- <PLUGIN_VERSION>: <CHANGELOG_LINE>").
-export const CHANGELOG_LINE = 'dark check samples store the reply snippet they judged instead of the check message, so silent checks can be reviewed.'
+export const CHANGELOG_LINE = 'when a message already reached J this turn, the judge now sees it and checks a later wrap-up only for what J still lacks, so a short wrap-up is not failed for leaving out an answer J already has.'
 export const FIX_CATEGORY = 'unchecked reply'
 export const VERSION_ROW_KEY = 'fixesRowVersion' // the last PLUGIN_VERSION whose fixes row was queued
 export const versionRow = (date: string, time: string): { id: string; collection: string; data: Record<string, unknown> } => ({ id: `f-auto-dg${PLUGIN_VERSION.replace(/\./g, '')}`, collection: 'fixes', data: { category: FIX_CATEGORY, date, kind: 'hook', status: 'landed', title: `dispatch-guard ${PLUGIN_VERSION} (auto)`, detail: `dispatch-guard ${PLUGIN_VERSION} first deep turn ${date} ${time} SGT: ${CHANGELOG_LINE}`, plugin_version: PLUGIN_VERSION, auto: true } })
@@ -2330,6 +2330,13 @@ export async function sessionWho($: EngineInterface): Promise<SessionWho> {
   return { attended, origin, unattended: attended === '0' }
 }
 // 0.6.28: one unchecked reply seen at a Stop (each Stop of a Stop-hook chain, not only the last text turn.complete sees). Does not close the prompt.
+// W44: one deny-log entry per unchecked reply, with reply and ask snippets, so the unchecked count can be split by cause.
+export async function logUnchecked($: EngineInterface, via: string, reply: string, ask: string): Promise<void> {
+  try {
+    const log = await $.store.get(DENY_LOG_KEY)
+    await $.store.set(DENY_LOG_KEY, [...(Array.isArray(log) ? log : []), { time: sgtIso(await nowMs($)), session: await $.session.id(), n: 0, final: 'unchecked', via, reply: excerpt(reply), ask: excerpt(ask), checks: [] }].slice(-500))
+  } catch { /* stats only */ }
+}
 export async function statsUnchecked($: EngineInterface, who?: SessionWho, reworded = false): Promise<void> {
   try {
     const sid = String(await $.session.id()), date = sgtIso(await nowMs($)).slice(0, 10), st = await readStats($, sid, date)
@@ -2555,7 +2562,7 @@ export const register: Register = on => {
   // 0.6.21: the judge also sees what SendUserMessage already told J this turn, so a final reply is not failed for 'not answering' a question a mid-turn message answered.
   const sentEvidence = (ev: string): string => {
     const auto = [...agentLaunches.slice(-15).map(a => `launched ${a}`), ...turnSends.slice(-15), ...turnActs.slice(-30)]
-    const already = [...delivered, ...sentText]
+    const already = [...new Set([...priorFacing, ...delivered, ...sentText])] // W45: a Stop-hook continuation also sees what the blocked turn sent mid-turn
     return `${ev}${already.length === 0 ? '' : `\nAlready sent to J this turn: ${already.join('\n---\n')}`}${auto.length === 0 ? '' : `\nAuto-evidence: ${auto.join('; ')}`}`.slice(-20_000)
   }
   const numbered = (probs: Problem[]): string => probs.map((x, i) => `${i + 1}) ${x.text}`).join(' ')
@@ -2700,7 +2707,7 @@ export const register: Register = on => {
       const h = replyHash(last)
       who ??= await sessionWho($)
       const reworded = finalPassed.size > 0
-      if (!countedUnchecked.has(h)) { countedUnchecked.add(h); await statsUnchecked($, who, reworded) }
+      if (!countedUnchecked.has(h)) { countedUnchecked.add(h); await statsUnchecked($, who, reworded); await logUnchecked($, 'stop', last, asked) } // W44: Stop-counted misses carry reply + ask snippets so causes can be sorted
       if (!who.unattended && !stopBlocked.has(h)) { stopBlocked.add(h); return { block: reworded ? STOP_REWORDED : STOP_RECHECK } }
     }
     return next(e)
@@ -2846,7 +2853,7 @@ export const register: Register = on => {
 
       // 0.6.22: cheap rule checks run first; a draft that already fails one comes back at once, without the slower judge call.
       const ruleFirst = !atCap && deepProblems(text, f).some(p => !logOnly(p.id) && !DEEP_DARK.has(p.id))
-      const jr = pre.length > 0 || ruleFirst || skipJudge(text, ja.cur) ? undefined : await judgeReply($, text, ja.ask, sentEvidence(String(x.evidence ?? '')), turnResults, f)
+      const jr = pre.length > 0 || ruleFirst || skipJudge(text, ja.cur) ? undefined : await judgeReply($, text, askNote(ja.ask, sentText.length + priorFacing.length > 0), sentEvidence(String(x.evidence ?? '')), turnResults, f)
       const g = await deepGate($, text, f, denied, epoch, jr === undefined || jr.status === 'unavailable' ? undefined : { problems: jr.problems.map(t => ({ id: 'judge', text: `judge: ${t}` })) }, atCap && jr === undefined, pre, mc)
       denied = g.denied
       const recheck = stopBlocked.has(replyHash(text))
@@ -2971,7 +2978,7 @@ export const register: Register = on => {
           // judge problems go in as `pre`, not `judged`: the narrow checks stay live on this path (never loosened by the judge's answer)
           const g = await deepGate($, said, sf, denied, epoch, undefined, false, sj === undefined || sj.status === 'unavailable' ? [] : sj.problems.map(t => ({ id: 'judge', text: `judge: ${t}` })), mc)
           denied = g.denied
-          if (g.probs.length > 0 && !g.capped) return { deny: `Deep mode: call check_reply first. Fix these before J sees the reply (${g.denied}/${mc === undefined ? denyCap() : Math.min(mc, denyCap())}), check with check_reply, then resend with SendUserMessage: ${numbered(g.probs)}` }
+          if (g.probs.length > 0 && !g.capped) return { deny: `Deep mode: call check_reply first. This refused draft was not delivered, but the app can still show a refused send to J, so assume he saw it. Fix these (${g.denied}/${mc === undefined ? denyCap() : Math.min(mc, denyCap())}), check with check_reply, then send J only what the fix changes (a one-line correction if the draft misled), never the same text again: ${numbered(g.probs)}` }
           if (g.capped) notes.push(capNote(g.probs, mc === undefined ? denyCap() : Math.min(mc, denyCap())))
         }
         markLines(said)
@@ -3147,10 +3154,10 @@ export const register: Register = on => {
     const skipDeep = isDeep && finalPassed.has(replyHash(e.answer)) // already checked pre-send by the same checks: no double count, no carry line
     if (isDeep) await queueVersionRow($) // 0.6.29: first deep J turn on a new version writes its Scoreboard fixes row
     if (skipDeep) markLines(e.answer)
-    if (isDeep && !skipDeep) {
+    if (isDeep && !skipDeep && !countedUnchecked.has(replyHash(String(e.answer ?? '')))) { // W44: a reply already logged at its Stop is not logged twice
       await Promise.resolve().then(async () => {
         const log = await $.store.get(DENY_LOG_KEY)
-        await $.store.set(DENY_LOG_KEY, [...(Array.isArray(log) ? log : []), { time: sgtIso(await nowMs($)), session: await $.session.id(), n: 0, final: skipJudge(String(e.answer ?? ''), asked) ? 'short' : 'unchecked', checks: [] }].slice(-500))
+        await $.store.set(DENY_LOG_KEY, [...(Array.isArray(log) ? log : []), { time: sgtIso(await nowMs($)), session: await $.session.id(), n: 0, final: skipJudge(String(e.answer ?? ''), asked) ? 'short' : 'unchecked', via: 'turn-end', reply: excerpt(String(e.answer ?? '')), ask: excerpt(asked), checks: [] }].slice(-500))
       }).catch(() => undefined)
     }
     if (!jTurn && stopBlocked.size > 0 && finalText && sendOk) await statsReply($, [], 0, false, [], { tools: toolN, words: wordCount(e.answer) }) // 0.6.33: the guard-started continuation of a Stop re-check: its final text is the last J-visible message of the prompt

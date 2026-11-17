@@ -3,7 +3,7 @@ import { CARD } from './orchestrator-card'
 import { askPush, askAnswered, buildAsk, NO_NEW_ASK, EARLIER_ASKS, ASK_DONE_MAX, type AskState } from './register'
 import { validatePack, bundledPackJson, BUNDLED_VERSION, mergePack, bundledRules } from './rulepack'
 import { closureMisses, evidenceFirstHit, evidenceCall, realChange, deepCategory, jRow, corrRow, prefilterLines, repeatedLines } from './register'
-import { MISSING_LINE, sessionBlock, SESSION_INDEX_KEY, KEEP_SESSIONS, problemLabel, SET_RULES_TOOL, RULES_KEY, deepLine, setRules, cleanProblem, deepRow, tokensOf, JUDGE_TOKENS_KEY, judgeRules, skipJudge, denyCap, modeCommand, deepProblems, missingEfficiency, deepMissingLeap, replyHash, CHECK_TOOL, MODE_KEY, DENY_LOG_KEY, CAUGHT_KEY, JUDGE_KEY, JUDGE_RULES, parseJudge, DEEP_LINE, DEEP_DARK, CHECK_SPEC, stubOutput, undefinedLabels, questionOnly, redrafts, missingLeap, uncomputed, numbersIn, nonPreventions, startsWork, answersFirst, scopePhrases, asksJ, buriedAsks, promises, parkedFix, foregroundWait, offers, RELAY_AT, longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, jText, reasks, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL, clockStamp, danglingRefs, isJ, knowableAsks, inputAsk, workMade, draftGap, missUnlanded, fixEvidence, settleRow, absoluteClaims, openQuestions, PLUGIN_VERSION, sourceGate, efficiencyFix, STATS_KEY, statsRow, DARK_SAMPLES_CAP, STOP_RECHECK, STOP_REWORDED, SEND_JUDGE, SEND_ROUTE, ROUTE_LINE, statsJudge, STYLE_PROBLEM, inputDigest, keywordList, stateClaim, stopShort, footerOnly, NO_OUTPUT_NUDGE, versionRow, VERSION_ROW_KEY, CHANGELOG_LINE, classifyTier, askCount, wordCount, judgeLetters } from './register'
+import { MISSING_LINE, sessionBlock, SESSION_INDEX_KEY, KEEP_SESSIONS, problemLabel, SET_RULES_TOOL, RULES_KEY, deepLine, setRules, cleanProblem, deepRow, tokensOf, JUDGE_TOKENS_KEY, judgeRules, skipJudge, denyCap, modeCommand, deepProblems, missingEfficiency, deepMissingLeap, replyHash, CHECK_TOOL, MODE_KEY, DENY_LOG_KEY, CAUGHT_KEY, JUDGE_KEY, JUDGE_RULES, parseJudge, DEEP_LINE, DEEP_DARK, CHECK_SPEC, stubOutput, undefinedLabels, questionOnly, redrafts, missingLeap, uncomputed, numbersIn, nonPreventions, startsWork, answersFirst, scopePhrases, asksJ, buriedAsks, promises, parkedFix, foregroundWait, offers, RELAY_AT, longPoints, unverified, unproven, DIR_TOKEN, SKILLS_ROOT, fnv8, scopeCtx, jText, reasks, splitCard, stripFrontmatter, correcting, corrCategory, SCOREBOARD_URL, clockStamp, danglingRefs, isJ, knowableAsks, inputAsk, workMade, draftGap, missUnlanded, fixEvidence, settleRow, absoluteClaims, openQuestions, PLUGIN_VERSION, sourceGate, efficiencyFix, STATS_KEY, statsRow, DARK_SAMPLES_CAP, STOP_RECHECK, STOP_REWORDED, SEND_JUDGE, SEND_ROUTE, ROUTE_LINE, statsJudge, STYLE_PROBLEM, inputDigest, keywordList, stateClaim, stopShort, footerOnly, NO_OUTPUT_NUDGE, versionRow, VERSION_ROW_KEY, CHANGELOG_LINE, classifyTier, askCount, wordCount, judgeLetters, ANSWERED_NOTE } from './register'
 
 const TURN = /4th tool call this turn/
 const BASH = /Foreground Bash builds\/tests\/installs\/clones\/waits/
@@ -2046,6 +2046,8 @@ test('deep: a known-bad message is denied with the exact problem; a clean one pa
   expect(r.deny).toMatch(/call check_reply first/)
   expect(r.deny).toMatch(/unbacked absolute claim/)
   expect(r.deny).toMatch(/1\/2/)
+  expect(r.deny).toMatch(/never the same text again/) // 0.6.45: a refused send may still be shown to J,
+  expect(r.deny).not.toMatch(/resend/i)
   const ok = await $.tool.call(send(CLEAN)) as any
   expect(ok.deny).toBeUndefined()
 })
@@ -3030,7 +3032,7 @@ test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft pas
   expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
   expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 1, judge_ok: 1, judge_unavailable: 0, tokens_in: 100, tokens_out: 20, tokens_cache: 50 })
   expect(Object.values(d.fail_checks).reduce((a: number, b: any) => a + b, 0)).toBeGreaterThanOrEqual(2) // 0.6.22: the two failed BADC rounds are counted by check id
-  expect(PLUGIN_VERSION).toBe('0.6.44')
+  expect(PLUGIN_VERSION).toBe('0.6.47')
 })
 test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
   const { mem } = deepEngine(on, true)
@@ -4000,6 +4002,27 @@ test('0.6.25 Stop-hook continuation: a draft repeating what J already saw fails 
   expect(((await $.tool.call(chk(first))) as any).result).not.toMatch(/Stop-hook continuation/)
 })
 
+test('W45 Stop re-check: a wrap-up after a mid-turn SendUserMessage is judged with that message as already sent and the ask marked answered', async ($, on) => {
+  const { judge } = deepEngine(on)
+  envBox(on, { CLAUDE_CODE_SESSION_ATTENDED: '1' })
+  judge.reply = JUDGE_OK
+  const table = 'Total: about S$4.50 a day. Calmer 2.13, Xandro 0.79, creatine 0.21.'
+  await jTurnStart($, 'calculate daily cost of my stack', 'w1')
+  await $.tool.call({ tool: 'Read', file_path: '/x' } as any)
+  await $.tool.call(chk(table, { evidence: 'EV' }))
+  await $.tool.call(send(table))
+  const wrap = 'Breakdown sent: about S$4.50 a day, and Heights Calmer is nearly half of it.'
+  const r1 = await ($ as any).classic.Stop({ stop_hook_active: false, last_assistant_message: wrap })
+  const n0 = judge.calls.length
+  const rr = await $.tool.call(chk(wrap, { evidence: 'EV' })) as any
+  const p = String(judge.calls[judge.calls.length - 1].prompt)
+  expect(p).toContain(`Already sent to J this turn: ${table}`)
+  expect(p).toContain(ANSWERED_NOTE)
+  expect(n0).toBeLessThan(judge.calls.length)
+  expect(r1.block).toBeDefined()
+  expect(String(rr.result)).toMatch(/^PASS /)
+})
+
 test('0.6.25 the guard\'s own suggested Efficiency wording passes its own checks (efficiency-line, efficiency-none, efficiency-fix, closure-line)', () => {
   const t = '**Efficiency:** the first draft lacked the agent count.'
   expect(efficiencyFix(t, false)).toBe(false)
@@ -4152,6 +4175,10 @@ test('0.6.28 Stop: an unchecked long reply is counted at its Stop and blocked on
   expect(r2.block).toBeUndefined()
   await $.turn.complete(end('s1', LONGW))
   expect(statRows(mem)[0].data).toMatchObject({ unchecked: 1, unchecked_unattended: 0, attended: '1', session_origin: 'claude_ai_chat' })
+  const ul = (mem[DENY_LOG_KEY] as any[]).filter(x => x.final === 'unchecked') // W44: one entry, with snippets to sort causes by
+  expect(ul.length).toBe(1)
+  expect(ul[0]).toMatchObject({ via: 'stop', ask: 'why?' })
+  expect(ul[0].reply.length).toBeGreaterThan(0)
 })
 test('0.6.28 Stop chain: a blocked reply and its different unchecked continuation both count (13 Nov 08:40: the first was never counted)', async ($, on) => {
   const { mem } = deepEngine(on, false)
@@ -4309,10 +4336,10 @@ test('0.6.29 fix d: the first deep J turn on a new version queues one Scoreboard
   await $.turn.complete(end('d2', 'Noted.'))
   const rows = ((mem.corrLog as any[]) ?? []).filter(r => r.collection === 'fixes')
   expect(rows.length).toBe(1)
-  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0644', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.44' } })
+  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0647', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.47' } })
   expect(rows[0].data.detail).toContain(CHANGELOG_LINE)
-  expect(mem[VERSION_ROW_KEY]).toBe('0.6.44')
-  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.44 (auto)')
+  expect(mem[VERSION_ROW_KEY]).toBe('0.6.47')
+  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.47 (auto)')
 })
 
 // 0.6.30 cross-turn bleed (live 13 Nov 12:37-12:39 SGT): rule (d) cited "Are you done with all fixes?" (12:35, answered) against later asks.
