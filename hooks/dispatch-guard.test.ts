@@ -3032,7 +3032,7 @@ test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft pas
   expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
   expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 1, judge_ok: 1, judge_unavailable: 0, tokens_in: 100, tokens_out: 20, tokens_cache: 50 })
   expect(Object.values(d.fail_checks).reduce((a: number, b: any) => a + b, 0)).toBeGreaterThanOrEqual(2) // 0.6.22: the two failed BADC rounds are counted by check id
-  expect(PLUGIN_VERSION).toBe('0.6.47')
+  expect(PLUGIN_VERSION).toBe('0.6.48')
 })
 test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
   const { mem } = deepEngine(on, true)
@@ -4164,7 +4164,7 @@ test('0.6.27 closure-line: every real-miss line from the AB-0626d audit still fa
 })
 
 // 0.6.28 live skips (LIVE-SKIP.md): every unchecked Stop text counts; unattended sessions count apart; send = check; Stop re-check once.
-const envBox = (on: any, vals: Record<string, string>) => { on('env.get', (_$: any, e: any) => ({ value: vals[e.name] })); on('classic.Stop', () => ({})); on('turn.complete', (_$: any, e: any) => ({ text: e.answer })) }
+const envBox = (on: any, vals: Record<string, string>) => { on('classic.UserPromptSubmit', () => ({})); on('env.get', (_$: any, e: any) => ({ value: vals[e.name] })); on('classic.Stop', () => ({})); on('turn.complete', (_$: any, e: any) => ({ text: e.answer })) }
 test('0.6.28 Stop: an unchecked long reply is counted at its Stop and blocked once with the re-check; the turn end does not count it again', async ($, on) => {
   const { mem } = deepEngine(on, false)
   envBox(on, { CLAUDE_CODE_SESSION_ATTENDED: '1', CLAUDE_CODE_SESSION_ORIGIN: 'claude_ai_chat' })
@@ -4190,6 +4190,44 @@ test('0.6.28 Stop chain: a blocked reply and its different unchecked continuatio
   await $.turn.complete(end('s2', LONG2))
   expect(statRows(mem)[0].data).toMatchObject({ unchecked: 2 })
 })
+// 0.6.48: a scheduled-task fire (classic.UserPromptSubmit source 'schedule_wakeup') is an unattended run even when the env says attended '' and origin ''.
+const fire = async ($: any, source: string | undefined, text: string) => { await $.classic.UserPromptSubmit({ prompt: text, ...(source === undefined ? {} : { source }) }) }
+test('0.6.48 scheduled fire with env attended "" and origin "": unchecked reply counts apart, no Stop re-check block, origin recorded', async ($, on) => {
+  const { mem } = deepEngine(on, false)
+  envBox(on, {})
+  await fire($, 'schedule_wakeup', 'run the price book')
+  await jTurnStart($, 'run the price book', 'sc1')
+  const r1 = await ($ as any).classic.Stop({ stop_hook_active: false, last_assistant_message: LONGW })
+  expect(r1.block).toBeUndefined()
+  await $.turn.complete(end('sc1', LONGW))
+  expect(statRows(mem)[0].data).toMatchObject({ unchecked: 0, unchecked_unattended: 1, attended: '', session_origin: 'schedule_wakeup' })
+})
+test('0.6.48 a later user prompt in the same session is attended again: re-check block and unchecked count are as for J', async ($, on) => {
+  const { mem } = deepEngine(on, false)
+  envBox(on, {})
+  await fire($, 'schedule_wakeup', 'tick')
+  await jTurnStart($, 'tick', 'sc2')
+  await ($ as any).classic.Stop({ stop_hook_active: false, last_assistant_message: LONGW })
+  await $.turn.complete(end('sc2', LONGW))
+  await fire($, 'user', 'why?')
+  await jTurnStart($, 'why?', 'sc3')
+  const LONG3 = `${LONGW} again`
+  const r = await ($ as any).classic.Stop({ stop_hook_active: false, last_assistant_message: LONG3 })
+  expect(r.block).toBe(STOP_RECHECK)
+  await $.turn.complete(end('sc3', LONG3))
+  expect(statRows(mem)[0].data).toMatchObject({ unchecked: 1, unchecked_unattended: 1 })
+})
+for (const src of [undefined, 'user', 'sdk', 'loop_wakeup', 'system'])
+  test(`0.6.48 J's chat is unchanged: prompt source ${src ?? '(none)'} with env origin claude_ai_chat is blocked once and counted as unchecked`, async ($, on) => {
+    const { mem } = deepEngine(on, false)
+    envBox(on, { CLAUDE_CODE_SESSION_ORIGIN: 'claude_ai_chat' })
+    await fire($, src, 'why?')
+    await jTurnStart($, 'why?', 'sc4')
+    const r = await ($ as any).classic.Stop({ stop_hook_active: false, last_assistant_message: LONGW })
+    expect(r.block).toBe(STOP_RECHECK)
+    await $.turn.complete(end('sc4', LONGW))
+    expect(statRows(mem)[0].data).toMatchObject({ unchecked: 1, unchecked_unattended: 0, session_origin: 'claude_ai_chat' })
+  })
 test('0.6.28 Stop: a passed reply, a short reply and a non-J turn are never counted or blocked', async ($, on) => {
   const { mem, judge } = deepEngine(on, false)
   judge.reply = JUDGE_OK
@@ -4336,10 +4374,10 @@ test('0.6.29 fix d: the first deep J turn on a new version queues one Scoreboard
   await $.turn.complete(end('d2', 'Noted.'))
   const rows = ((mem.corrLog as any[]) ?? []).filter(r => r.collection === 'fixes')
   expect(rows.length).toBe(1)
-  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0647', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.47' } })
+  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0648', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.48' } })
   expect(rows[0].data.detail).toContain(CHANGELOG_LINE)
-  expect(mem[VERSION_ROW_KEY]).toBe('0.6.47')
-  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.47 (auto)')
+  expect(mem[VERSION_ROW_KEY]).toBe('0.6.48')
+  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.48 (auto)')
 })
 
 // 0.6.30 cross-turn bleed (live 13 Nov 12:37-12:39 SGT): rule (d) cited "Are you done with all fixes?" (12:35, answered) against later asks.

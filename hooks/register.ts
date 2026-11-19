@@ -2135,9 +2135,9 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.47'
+export const PLUGIN_VERSION = '0.6.48'
 // 0.6.29 version row: this version's CHANGELOG line (tools/build-zip.sh fails unless CHANGELOG.md has "- <PLUGIN_VERSION>: <CHANGELOG_LINE>").
-export const CHANGELOG_LINE = 'when a message already reached J this turn, the judge now sees it and checks a later wrap-up only for what J still lacks, so a short wrap-up is not failed for leaving out an answer J already has.'
+export const CHANGELOG_LINE = 'a scheduled-task fire (prompt source schedule_wakeup) now counts as an unattended run: its unchecked replies count apart and the Stop re-check is skipped, only for that prompt, so J chats are unchanged.'
 export const FIX_CATEGORY = 'unchecked reply'
 export const VERSION_ROW_KEY = 'fixesRowVersion' // the last PLUGIN_VERSION whose fixes row was queued
 export const versionRow = (date: string, time: string): { id: string; collection: string; data: Record<string, unknown> } => ({ id: `f-auto-dg${PLUGIN_VERSION.replace(/\./g, '')}`, collection: 'fixes', data: { category: FIX_CATEGORY, date, kind: 'hook', status: 'landed', title: `dispatch-guard ${PLUGIN_VERSION} (auto)`, detail: `dispatch-guard ${PLUGIN_VERSION} first deep turn ${date} ${time} SGT: ${CHANGELOG_LINE}`, plugin_version: PLUGIN_VERSION, auto: true } })
@@ -2310,7 +2310,7 @@ export async function statsTurnEnd($: EngineInterface, epoch: string | number, r
       if (!(checked && st.eFail)) st.firstPass += 1
     }
     if (reply === 'unchecked') { if (who?.unattended === true) st.uu += 1; else st.unchecked += 1 }
-    if (who !== undefined) { st.att = who.attended; st.so = who.origin }
+    if (who !== undefined) { st.att = who.attended; st.so = who.origin !== '' ? who.origin : (who.scheduled ?? '') }
     st.closed = e
     const tm = Number.isFinite(turnMs) && turnMs > 0 ? Math.round(turnMs) : 0
     st.tms += tm; st.tn += 1; st.tmax = Math.max(st.tmax, tm)
@@ -2323,7 +2323,11 @@ export async function statsTurnEnd($: EngineInterface, epoch: string | number, r
 }
 // 0.6.28: who reads this session. `attended` / `origin` are the session's CLAUDE_CODE_SESSION_ATTENDED / CLAUDE_CODE_SESSION_ORIGIN ('' when unset);
 // unattended = ATTENDED is "0" (a run nobody watches, e.g. a scheduled task's fresh session): its unchecked replies count apart (unchecked_unattended).
-export type SessionWho = { attended: string; origin: string; unattended: boolean }
+// 0.6.48: a prompt the engine marks `source: 'schedule_wakeup'` on classic.UserPromptSubmit ("scheduled-task fire (CronCreate or a cloud scheduled task)") is a
+// scheduled run, whatever CLAUDE_CODE_SESSION_ATTENDED says (the 28 fresh-session scheduled runs of 15-19 Nov carried attended '' and origin ''). `scheduled` is that source.
+export type SessionWho = { attended: string; origin: string; unattended: boolean; scheduled?: string }
+export const SCHEDULED_SOURCE = 'schedule_wakeup'
+export const withSchedule = (w: SessionWho, fired: string): SessionWho => fired === '' ? w : { ...w, unattended: true, scheduled: fired }
 export async function sessionWho($: EngineInterface): Promise<SessionWho> {
   const get = async (k: 'a' | 'o'): Promise<string> => { try { return String((k === 'a' ? await $.env.get('CLAUDE_CODE_SESSION_ATTENDED') : await $.env.get('CLAUDE_CODE_SESSION_ORIGIN')) ?? '') } catch { return '' } }
   const attended = await get('a'), origin = await get('o')
@@ -2342,7 +2346,7 @@ export async function statsUnchecked($: EngineInterface, who?: SessionWho, rewor
     const sid = String(await $.session.id()), date = sgtIso(await nowMs($)).slice(0, 10), st = await readStats($, sid, date)
     if (who?.unattended === true) st.uu += 1; else st.unchecked += 1
     if (reworded) st.rw = (st.rw ?? 0) + 1 // W24: a final reply that differs from the text check_reply passed this turn
-    if (who !== undefined) { st.att = who.attended; st.so = who.origin }
+    if (who !== undefined) { st.att = who.attended; st.so = who.origin !== '' ? who.origin : (who.scheduled ?? '') }
     await $.store.set(`${STATS_KEY}:${sid}`, st)
     await upsertRows($, [{ id: `deepstats-${sid}-${date}`, data: statsRow(sid, date, st) }])
     await corrFlush($).catch(() => 0)
@@ -2540,7 +2544,8 @@ export const register: Register = on => {
   const countedUnchecked = new Set<string>() // 0.6.28: hashes of unchecked replies already counted this prompt (Stop and turn end see the same text)
   let stopChainDone = false // 0.6.29: a Stop re-check passed, was footer-only or got its correction sent: no further Stop re-check until J's next prompt
   const stopBlocked = new Set<string>() // 0.6.28: hashes the Stop re-check already blocked once this prompt (never twice: no loop)
-  let who: SessionWho | undefined // 0.6.28: read once per module load
+  let who: SessionWho | undefined // 0.6.28: the session's env, read once per module load; 0.6.48: read through withSchedule (adds the scheduled-fire flag)
+  let schedFire = '' // 0.6.48: the source of the prompt now running when the engine marked it a scheduled-task fire; reset by every other prompt, so J's later messages in the same session are never unattended
   let turnResults = '' // this turn's tool results (tool + first 1500 chars each, last 6000 kept): the judge's hook evidence
   let sendOk = true // this session's tool list carries check_reply (re-registered at each deep prompt if missing); else deep behaves as light
   let hadLeap = false // an earlier text this turn (passed by check_reply or sent) already carried a Leap line
@@ -2698,6 +2703,8 @@ export const register: Register = on => {
   // hook blocked and the continuation replaced still counts (turn.complete sees only the last text). In an attended session the first such Stop
   // of a text is blocked once with STOP_RECHECK: the model checks the text J already has and sends only a correction, or nothing.
   // W24 (0.6.39): when check_reply passed another text this turn, the block carries STOP_REWORDED instead and counts reworded_sends.
+  // 0.6.48: every prompt resets the flag; only an engine-marked scheduled fire sets it (a payload without `source` counts as not scheduled).
+  on('classic.UserPromptSubmit', async ($, e, next) => { schedFire = String((e as Record<string, unknown>).source ?? '') === SCHEDULED_SOURCE ? SCHEDULED_SOURCE : ''; return next(e) })
   on('classic.Stop', async ($, e, next) => {
     const last = String((e as Record<string, unknown>).last_assistant_message ?? '')
     if (last.trim() !== '') replyDelivered(last) // 0.6.30: this text reached J; the asks pending now are answered by it
@@ -2706,9 +2713,10 @@ export const register: Register = on => {
     if (last.trim() !== '' && jTurn && sendOk && !stopShort(last) && (await readMode($, mode)) === 'deep') {
       const h = replyHash(last)
       who ??= await sessionWho($)
+      const wh = withSchedule(who, schedFire)
       const reworded = finalPassed.size > 0
-      if (!countedUnchecked.has(h)) { countedUnchecked.add(h); await statsUnchecked($, who, reworded); await logUnchecked($, 'stop', last, asked) } // W44: Stop-counted misses carry reply + ask snippets so causes can be sorted
-      if (!who.unattended && !stopBlocked.has(h)) { stopBlocked.add(h); return { block: reworded ? STOP_REWORDED : STOP_RECHECK } }
+      if (!countedUnchecked.has(h)) { countedUnchecked.add(h); await statsUnchecked($, wh, reworded); await logUnchecked($, 'stop', last, asked) } // W44: Stop-counted misses carry reply + ask snippets so causes can be sorted
+      if (!wh.unattended && !stopBlocked.has(h)) { stopBlocked.add(h); return { block: reworded ? STOP_REWORDED : STOP_RECHECK } }
     }
     return next(e)
   })
@@ -3167,9 +3175,10 @@ export const register: Register = on => {
     if (finalText && replyWaits.length > 0 && !(jTurn && deepNow)) { const r = takeReply(); if (deepNow) await statsReply($, r.w, r.c, r.g, r.w, { tools: toolN, at: r.at, tier: r.tr, words: wordCount(e.answer) }) }
     if (jTurn && sendOk && (await readMode($, mode)) === 'deep') {
       who ??= await sessionWho($)
+      const wh = withSchedule(who, schedFire)
       const seen = countedUnchecked.has(replyHash(String(e.answer ?? ''))) // 0.6.28: already counted at its Stop
       if (finalText) { const r = takeReply(); await statsReply($, r.w, r.c, r.g, r.w, { tools: toolN, at: r.at, tier: r.tr, words: wordCount(e.answer) }) } // 0.6.33: nothing went out mid-turn: the final text is the first reply
-      await statsTurnEnd($, epoch, !finalText ? 'none' : skipJudge(String(e.answer ?? ''), asked) ? 'short' : skipDeep || seen ? 'none' : 'unchecked', turnT0 > 0 ? await nowMs($) - turnT0 : 0, who)
+      await statsTurnEnd($, epoch, !finalText ? 'none' : skipJudge(String(e.answer ?? ''), asked) ? 'short' : skipDeep || seen ? 'none' : 'unchecked', turnT0 > 0 ? await nowMs($) - turnT0 : 0, wh)
     }
     let line: string | undefined
     if (rx('running-proof','claim').test(e.answer) && unproven(e.answer, proof || (await openCount($)) > 0)) line = msg('running-proof')
