@@ -1455,7 +1455,7 @@ export const SEND_JUDGE = true
 export const SEND_ROUTE = false
 export const ROUTE_LINE = `Send every reply to J with SendUserMessage: it runs the same check before J sees it and holds a failing draft (check_reply first is optional and saves a round). After it goes out, end the turn with no text.`
 // 0.6.28: the Stop re-check (once per text): the reply reached J unchecked; check it now and send only a correction.
-export const STOP_RECHECK = `Deep mode: this reply reached J without a check_reply PASS. Call ${CHECK_TOOL} now with this exact reply as text. If it passes, end the turn with no text: J already has it (if the app then asks for visible output, one line of at most 8 words with no claims, e.g. "Nothing to add."; it is not checked again). If it fails, send J only the correction (what was wrong, the fixed line) with SendUserMessage; never repeat the reply.`
+export const STOP_RECHECK = `Deep mode: this reply reached J without a check_reply PASS. Call ${CHECK_TOOL} now with this exact reply as text. If it passes, end the turn with no text: J already has it, so never write it again as your final reply or send it with SendUserMessage (if the app then asks for visible output, one line of at most 8 words with no claims, e.g. "Nothing to add."; it is not checked again). If it fails, send J only the correction (what was wrong, the fixed line) with SendUserMessage; never repeat the reply.`
 // W24 (0.6.39): a final reply that differs (whitespace-normalised) from every text check_reply passed this turn is blocked with this instead.
 export const STOP_REWORDED = 'Sent text differs from the passed draft. Re-run check_reply on the exact text you sent; from now on the final reply must be the passed text verbatim.'
 // 0.6.29 (J 12:40, repeat loop): the Stop re-check's own exemptions. A short text (under deep-judge minWords, no claim word, not a yes/no
@@ -2135,9 +2135,9 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.48'
+export const PLUGIN_VERSION = '0.6.49'
 // 0.6.29 version row: this version's CHANGELOG line (tools/build-zip.sh fails unless CHANGELOG.md has "- <PLUGIN_VERSION>: <CHANGELOG_LINE>").
-export const CHANGELOG_LINE = 'a scheduled-task fire (prompt source schedule_wakeup) now counts as an unattended run: its unchecked replies count apart and the Stop re-check is skipped, only for that prompt, so J chats are unchanged.'
+export const CHANGELOG_LINE = 'a continuation after the Stop unchecked-reply re-check can no longer repeat the reply J already saw: the re-check PASS says end with no text, a send or draft repeating the blocked text is refused, and a leaked repeat is counted in stats.'
 export const FIX_CATEGORY = 'unchecked reply'
 export const VERSION_ROW_KEY = 'fixesRowVersion' // the last PLUGIN_VERSION whose fixes row was queued
 export const versionRow = (date: string, time: string): { id: string; collection: string; data: Record<string, unknown> } => ({ id: `f-auto-dg${PLUGIN_VERSION.replace(/\./g, '')}`, collection: 'fixes', data: { category: FIX_CATEGORY, date, kind: 'hook', status: 'landed', title: `dispatch-guard ${PLUGIN_VERSION} (auto)`, detail: `dispatch-guard ${PLUGIN_VERSION} first deep turn ${date} ${time} SGT: ${CHANGELOG_LINE}`, plugin_version: PLUGIN_VERSION, auto: true } })
@@ -2540,9 +2540,10 @@ export const register: Register = on => {
   let early = '' // 0.6.10: text known before the first work call — the turn's opening text plus SendUserMessage texts sent at work 0
 
   let epoch = '0' // one per J prompt (time + random, survives a reload): the per-draft failure count in the store belongs to one epoch
-  const newEpoch = (): void => { epoch = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`; denied = 0; countedUnchecked.clear(); stopBlocked.clear(); stopChainDone = false }
+  const newEpoch = (): void => { epoch = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`; denied = 0; countedUnchecked.clear(); stopBlocked.clear(); stopTexts = []; stopChainDone = false }
   const countedUnchecked = new Set<string>() // 0.6.28: hashes of unchecked replies already counted this prompt (Stop and turn end see the same text)
   let stopChainDone = false // 0.6.29: a Stop re-check passed, was footer-only or got its correction sent: no further Stop re-check until J's next prompt
+  let stopTexts: string[] = [] // 0.6.49: texts the Stop re-check blocked this prompt (J already saw them): a later send or draft may not repeat them
   const stopBlocked = new Set<string>() // 0.6.28: hashes the Stop re-check already blocked once this prompt (never twice: no loop)
   let who: SessionWho | undefined // 0.6.28: the session's env, read once per module load; 0.6.48: read through withSchedule (adds the scheduled-fire flag)
   let schedFire = '' // 0.6.48: the source of the prompt now running when the engine marked it a scheduled-task fire; reset by every other prompt, so J's later messages in the same session are never unattended
@@ -2716,7 +2717,9 @@ export const register: Register = on => {
       const wh = withSchedule(who, schedFire)
       const reworded = finalPassed.size > 0
       if (!countedUnchecked.has(h)) { countedUnchecked.add(h); await statsUnchecked($, wh, reworded); await logUnchecked($, 'stop', last, asked) } // W44: Stop-counted misses carry reply + ask snippets so causes can be sorted
-      if (!wh.unattended && !stopBlocked.has(h)) { stopBlocked.add(h); return { block: reworded ? STOP_REWORDED : STOP_RECHECK } }
+      // 0.6.49: a continuation text that repeats what the re-check blocked already reached J; never a second block (no forced redo), counted so the leak shows in stats.
+      if (stopTexts.length > 0 && !finalPassed.has(h) && (stopBlocked.has(h) || repeatedLines(last, stopTexts.join('\n')).length > 0)) await statsDark($, [{ id: 'stop-repeat-leak', snip: last }])
+      if (!wh.unattended && !stopBlocked.has(h)) { stopBlocked.add(h); stopTexts = [...stopTexts, last.slice(0, 3000)].slice(-5); return { block: reworded ? STOP_REWORDED : STOP_RECHECK } }
     }
     return next(e)
   })
@@ -2856,7 +2859,9 @@ export const register: Register = on => {
       const dr = danglingRefs(text, saidIn(String(await Promise.resolve().then(() => $.session.id()).catch(() => '?'))), webText)
       if (dr.length > 0) pre.push({ id: 'dangling-ref', text: danglingMsg(dr) })
       // 0.6.25: after a Stop-hook block, the continuation sends only what is new (nothing, if the fix was bookkeeping).
-      const rp = priorFacing.length > 0 ? repeatedLines(text, [...priorFacing, ...sentText].join('\n')) : []
+      // 0.6.49: a text the Stop re-check blocked is also J-seen; a draft that differs from it (not a whitespace-only variant) may not repeat its lines.
+      const stopSeen = stopTexts.length > 0 && !stopBlocked.has(replyHash(text)) ? stopTexts : []
+      const rp = priorFacing.length + stopSeen.length > 0 ? repeatedLines(text, [...priorFacing, ...stopSeen, ...sentText].join('\n')) : []
       if (rp.length > 0) pre.push({ id: 'stop-repeat', text: `Stop-hook continuation: J already saw this; send only what is new, or no text if the fix was bookkeeping: ${rp.slice(0, 3).map(l => `"${l.slice(0, 60)}"`).join('; ')}` })
 
       // 0.6.22: cheap rule checks run first; a draft that already fails one comes back at once, without the slower judge call.
@@ -2890,7 +2895,8 @@ export const register: Register = on => {
       savePass = true
       if (passed.size > 50) passed.delete(passed.keys().next().value!)
       const midTag = mc === undefined || !g.capped ? '' : ' (mid-turn reply: one check round only; tag these open problems in the reply, then send it)'
-      return { result: `PASS ${replyHash(text)}${holdNote !== '' ? ` (note: ${cap} failed checks this prompt, judge skipped at the cap)` : ''}${g.capped ? ` (note: ${cap} failed checks, open problems: ${g.probs.map(x => x.text).join('; ')})${midTag}` : ''}` }
+      const reNote = recheck ? ' (Stop re-check passed: J already has this reply. End the turn with no text; do not write it again as the final reply or send it with SendUserMessage.)' : ''
+      return { result: `PASS ${replyHash(text)}${reNote}${holdNote !== '' ? ` (note: ${cap} failed checks this prompt, judge skipped at the cap)` : ''}${g.capped ? ` (note: ${cap} failed checks, open problems: ${g.probs.map(x => x.text).join('; ')})${midTag}` : ''}` }
     }
     const packMsg = await ensurePack($, budgetMs(next)).catch(() => undefined)
     let waitNote: string | undefined
@@ -2964,6 +2970,9 @@ export const register: Register = on => {
     if (e.tool === 'SendUserMessage') {
       const said = String((e as Record<string, unknown>).message ?? '')
       let preChecked = false // 0.6.25: check_reply already ran dangling-ref on this exact text
+      // 0.6.49: a send repeating a text the Stop re-check blocked (J already has it) is refused, passed or not; only what is new goes out.
+      const sRep = stopTexts.length > 0 && said.trim() !== '' ? repeatedLines(said, stopTexts.join('\n')) : []
+      if (sRep.length > 0) return { deny: `Stop-hook continuation: J already saw this reply. Send only what is new (a one-line correction), or nothing: ${sRep.slice(0, 3).map(l => `"${l.slice(0, 60)}"`).join('; ')}` }
       // 0.6.16 deep mode: a draft check_reply passed (same normalised text) goes out silently; an unchecked one is checked here and denied on problems.
       if (said.trim() !== '' && sendOk && (await readMode($, mode)) === 'deep') {
         const h = replyHash(said)

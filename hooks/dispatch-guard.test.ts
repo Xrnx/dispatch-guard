@@ -3032,7 +3032,7 @@ test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft pas
   expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
   expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 1, judge_ok: 1, judge_unavailable: 0, tokens_in: 100, tokens_out: 20, tokens_cache: 50 })
   expect(Object.values(d.fail_checks).reduce((a: number, b: any) => a + b, 0)).toBeGreaterThanOrEqual(2) // 0.6.22: the two failed BADC rounds are counted by check id
-  expect(PLUGIN_VERSION).toBe('0.6.48')
+  expect(PLUGIN_VERSION).toBe('0.6.49')
 })
 test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
   const { mem } = deepEngine(on, true)
@@ -4374,10 +4374,10 @@ test('0.6.29 fix d: the first deep J turn on a new version queues one Scoreboard
   await $.turn.complete(end('d2', 'Noted.'))
   const rows = ((mem.corrLog as any[]) ?? []).filter(r => r.collection === 'fixes')
   expect(rows.length).toBe(1)
-  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0648', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.48' } })
+  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0649', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.49' } })
   expect(rows[0].data.detail).toContain(CHANGELOG_LINE)
-  expect(mem[VERSION_ROW_KEY]).toBe('0.6.48')
-  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.48 (auto)')
+  expect(mem[VERSION_ROW_KEY]).toBe('0.6.49')
+  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.49 (auto)')
 })
 
 // 0.6.30 cross-turn bleed (live 13 Nov 12:37-12:39 SGT): rule (d) cited "Are you done with all fixes?" (12:35, answered) against later asks.
@@ -4430,7 +4430,7 @@ test('0.6.30 Stop re-check judges the asks its reply answered; a J message sent 
   await $.tool.call(chk(LONGW, { ask: 'stale', evidence: 'EV' }))
   expect(askOf(judge).startsWith('how should I plan my workday')).toBe(true) // the re-checked reply answers the workday ask
   expect(askOf(judge)).not.toContain('filesize')
-  await $.tool.call(chk(`${LONGW} next`, { ask: 'stale', evidence: 'EV' }))
+  await $.tool.call(chk('Separate answer about the file size, with no overlap with the first reply at all.', { ask: 'stale', evidence: 'EV' })) // 0.6.49: a draft extending the blocked text is now a stop-repeat; this one is new text
   expect(askOf(judge).startsWith('is it too big in filesize now?')).toBe(true)
   expect(askOf(judge)).toContain('"how should I plan my workday"')
 })
@@ -4832,4 +4832,42 @@ test('W23 stats: an answered prompt never counts as stopped; an interrupt after 
   await $.turn.complete({ answer: '', turnId: 's5', reason: 'aborted', durationMs: 1, isAborted: true } as any)
   await $.prompt.submit({ text: 'two' } as any)
   expect(latRow(mem)).toMatchObject({ final_count: 2, final_ms_total: 1000 + 2000, stopped_by_j: 0 })
+})
+
+// 0.6.49 (J 26 Nov 01:55 SGT): after the Stop unchecked-reply re-check, the continuation wrote the whole reply again as final text.
+test('0.6.49 Stop re-check chain: the re-check PASS says end with no text; a send repeating the blocked text is refused, a whitespace or trailing-line variant too; a new correction goes out', async ($, on) => {
+  const { judge } = deepEngine(on, false)
+  envBox(on, { CLAUDE_CODE_SESSION_ATTENDED: '1' })
+  judge.reply = JUDGE_OK
+  await jTurnStart($, 'why?', 'rp1')
+  await $.tool.call({ tool: 'Read', file_path: '/x' } as any)
+  const T = 'Yes, the gate was too narrow because it matched one phrase only. Replacing it with a general rule now.'
+  const r1 = await ($ as any).classic.Stop({ stop_hook_active: false, last_assistant_message: T })
+  expect(r1.block).toBe(STOP_RECHECK)
+  // the re-check: same text, whitespace variant -> PASS that tells the model to write nothing
+  const pass = ((await $.tool.call(chk(`  ${T.replace('because', '\n because')}\n`))) as any).result
+  expect(pass).toMatch(/^PASS /)
+  expect(pass).toMatch(/end the turn with no text/i)
+  // the continuation sends T again, or T with a trailing line: refused before it reaches J
+  for (const v of [T, `${T}\n\n`, `${T}\nOne more line of new substance here.`, T.replace('because', '\n because')]) {
+    const d = await $.tool.call(send(v)) as any
+    expect(String(d.deny)).toMatch(/J already saw this reply/)
+  }
+  // only what is new goes out
+  const ok = await $.tool.call(send('Second gate fixed too.')) as any
+  expect(ok.deny).toBeUndefined()
+})
+test('0.6.49 Stop re-check chain: a trailing-line variant of the blocked text fails check_reply as stop-repeat; the final repeat at Stop is counted and never blocked again', async ($, on) => {
+  const { judge, mem } = deepEngine(on, false)
+  envBox(on, { CLAUDE_CODE_SESSION_ATTENDED: '1' })
+  judge.reply = JUDGE_OK
+  await jTurnStart($, 'why?', 'rp2')
+  await $.tool.call({ tool: 'Read', file_path: '/x' } as any)
+  const T = 'Yes, the gate was too narrow because it matched one phrase only. Replacing it with a general rule now.'
+  await ($ as any).classic.Stop({ stop_hook_active: false, last_assistant_message: T })
+  const r = ((await $.tool.call(chk(`${T}\nAnd a new second line about the other gate.`))) as any).result
+  expect(r).toMatch(/Stop-hook continuation: J already saw this/)
+  const r2 = await ($ as any).classic.Stop({ stop_hook_active: true, last_assistant_message: T })
+  expect(r2.block).toBeUndefined()
+  expect(JSON.stringify(mem)).toMatch(/stop-repeat-leak/)
 })
