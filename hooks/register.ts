@@ -2176,7 +2176,7 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.49'
+export const PLUGIN_VERSION = '0.6.51'
 // 0.6.29 version row: this version's CHANGELOG line (tools/build-zip.sh fails unless CHANGELOG.md has "- <PLUGIN_VERSION>: <CHANGELOG_LINE>").
 export const CHANGELOG_LINE = 'a continuation after the Stop unchecked-reply re-check can no longer repeat the reply J already saw: the re-check PASS says end with no text, a send or draft repeating the blocked text is refused, and a leaked repeat is counted in stats.'
 export const FIX_CATEGORY = 'unchecked reply'
