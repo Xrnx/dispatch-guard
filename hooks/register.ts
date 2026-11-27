@@ -1169,7 +1169,14 @@ export async function corrAbsorb($: EngineInterface, input: Record<string, unkno
     // delivered and leaves the queue; an upsert (deepstats-) must still write its newer data, so it stays and waits for its version.
     if (w !== undefined && EXISTS.test(text.replace(CONFIRMED, '')) && !w.doc_id.startsWith('deepstats-')) { landed.set(w.doc_id, JSON.stringify(w.data)); existed++ }
   }
-  const rest = (await corrQueue($)).filter(q => !landed.has(q.id) || JSON.stringify(q.data) !== landed.get(q.id))
+  // 0.6.52: the refusal names a doc that exists; a queued one-shot row with that id is on the board whatever data the (hand-written) batch
+  // carried, so it leaves the queue by id alone. A deepstats- upsert never takes this path (it keeps pin-and-retry).
+  const gone = new Set<string>()
+  if (refused && EXISTS.test(text.replace(CONFIRMED, ''))) {
+    const bare = text.replace(CONFIRMED, '')
+    for (const q of await corrQueue($)) if (!q.id.startsWith('deepstats-') && new RegExp(`(?<![${ID_CHARS}])${escRx(q.id)}(?![${ID_CHARS}])`).test(bare)) { gone.add(q.id); existed++ }
+  }
+  const rest = (await corrQueue($)).filter(q => !gone.has(q.id) && (!landed.has(q.id) || JSON.stringify(q.data) !== landed.get(q.id)))
   await $.store.set(CORR_VER_KEY, pruneVers(vers, rest, now))
   await $.store.set(CORR_KEY, rest)
   if (existed > 0) await $.store.set(CORR_RELAY_KEY, 0) // W25: the queue is making progress, so the next prompt may relay again at once
@@ -2176,7 +2183,7 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.51'
+export const PLUGIN_VERSION = '0.6.52'
 // 0.6.29 version row: this version's CHANGELOG line (tools/build-zip.sh fails unless CHANGELOG.md has "- <PLUGIN_VERSION>: <CHANGELOG_LINE>").
 export const CHANGELOG_LINE = 'a continuation after the Stop unchecked-reply re-check can no longer repeat the reply J already saw: the re-check PASS says end with no text, a send or draft repeating the blocked text is refused, and a leaked repeat is counted in stats.'
 export const FIX_CATEGORY = 'unchecked reply'

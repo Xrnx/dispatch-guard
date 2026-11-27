@@ -2,7 +2,7 @@
 
 Keeps the orchestrator dispatcher replying to J first and checks each answer against J's rules.
 
-Current version: 0.6.51. One line per version, newest first, in [CHANGELOG.md](CHANGELOG.md); the notes below stop at 0.6.10.
+Current version: 0.6.52. One line per version, newest first, in [CHANGELOG.md](CHANGELOG.md); the notes below stop at 0.6.10.
 
 0.6.10: ask-first fires only for an ask knowable before the work: an input request (question, D/Q line, or send/tell/paste/choose/confirm/"I need") naming nothing the work produced ([●], blocked site, A-or-B options, a section/clause/item number or link absent from J's prompt and pre-work texts); to-dos handed to J ("check/fill/open … (needs you)") and replies to "what do you need from me" are silent (corpus 688→289 firings). miss-landing skips a Gap: line about J's draft (names a para/clause/heading/schedule/definition or 3.9 / 3(f), no I/me/my/we). **fixed:** each hook-fire Scoreboard row is held until the end of the next main turn, then sent with `fixed` true/false and `fixed_by`: true only if no J correction row followed in the session, the same check did not fire again next turn, and fix evidence appeared in the rest of the firing turn or the next (board write for finish-row/board-dispatch; write or launch for miss-landing/parked-fix/promise-proof/offer-guard/held-for-j, or (needs you) for the last three bar promise-proof, or a named existing rule for miss-landing; launch for running-proof; a link for source checks; a Checked: line for checked-line; the guard's own reply for idle-guard; the `requires` line for pack adds that have one; else a Correction: line). Rows with no next turn in 24 h go out without `fixed` (unresolved). No range-walk (0.6.9 is not the base); bundled pack unchanged.
 
