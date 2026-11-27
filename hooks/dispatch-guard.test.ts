@@ -770,6 +770,46 @@ test('corr-log: no assistant message yet means nothing to correct', async ($, on
   expect(mem.corrLog).toBeUndefined()
 })
 
+// 0.6.51 replay evidence on the auto-logged row: prev_reply (4000), prev_ask (1000), prev_evidence (2000); store copy; absent with no prior reply.
+test('corr-log 0.6.51: row and store carry prev_reply, prev_ask and prev_evidence, each capped', async ($, on) => {
+  const reply = 'R'.repeat(5000)
+  const { mem } = corrEngine(on, 'ask', [{ role: 'user', text: 'Q'.repeat(1500) }, { role: 'assistant', text: reply }, { role: 'tool', text: 'FILE-SECRET' }])
+  mem.checkEvidence = [{ h: replyHash('other'), ev: 'wrong' }, { h: replyHash(reply), ev: 'E'.repeat(3000) }]
+  await $.prompt.submit({ text: 'are you sure' } as any)
+  const d = (mem.corrLog as any[])[0].data
+  expect(d.prev_reply).toBe('R'.repeat(4000))
+  expect(d.prev_ask).toBe('Q'.repeat(1000))
+  expect(d.prev_evidence).toBe('E'.repeat(2000))
+  expect(d.rule).toBe('auto-logged; regex category (low confidence)')
+  const st = (mem.corrReplay as any[])[0]
+  expect(st).toMatchObject({ id: (mem.corrLog as any[])[0].id, prev_reply: d.prev_reply, prev_ask: d.prev_ask, prev_evidence: d.prev_evidence })
+  expect(JSON.stringify([d, st])).not.toContain('FILE-SECRET')
+})
+
+test('corr-log 0.6.51: no check_reply evidence for that reply leaves prev_evidence off', async ($, on) => {
+  const a = corrEngine(on, 'ask')
+  await $.prompt.submit({ text: 'are you sure' } as any)
+  const d = (a.mem.corrLog as any[])[0].data
+  expect(d.prev_reply).toBe('Verified: none.')
+  expect(d.prev_ask).toBe('Stamp duty on shares')
+  expect('prev_evidence' in d).toBe(false)
+})
+
+test('corr-log 0.6.51: a blank prior reply leaves all three fields off and writes no replay record', async ($, on) => {
+  const b = corrEngine(on, 'ask', [{ role: 'user', text: 'where' }, { role: 'assistant', text: '  ' }])
+  await $.prompt.submit({ text: 'are you sure' } as any)
+  const d = (b.mem.corrLog as any[])[0].data
+  expect(['prev_reply', 'prev_ask', 'prev_evidence'].filter(k => k in d)).toEqual([])
+  expect(b.mem.corrReplay).toBeUndefined()
+})
+
+test('check_reply 0.6.51: the evidence is stored against the draft hash, capped at 2000', async ($, on) => {
+  const { mem } = deepEngine(on)
+  await $.turn.start(turn('t1'))
+  await $.tool.call({ tool: CHECK_TOOL, text: CLEAN, evidence: 'x'.repeat(2500) } as any)
+  expect(mem.checkEvidence).toEqual([{ h: replyHash(CLEAN), ev: 'x'.repeat(2000) }])
+})
+
 test('corr-log: a main-thread ArtifactData write flushes the queue', async ($, on) => {
   let decision = 'ask'
   const { mem, calls } = corrEngine(on, () => decision)
