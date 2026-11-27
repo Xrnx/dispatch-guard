@@ -2,6 +2,7 @@
 
 One line per version, newest first. Every version bump adds its line here in the same commit. Sources: version comments in hooks/*.ts, README 0.6.x sections, git log. "no record" = no comment, README text or commit names that version.
 
+- 0.6.53: the deep judge runs Haiku and Sonnet (claude-sonnet-5-5) in parallel on the same JUDGE_RULES prompt; a problem stands if both flag (Sonnet wording) or either flags (a)/(b); Sonnet unavailable falls back to Haiku alone; deep-stats counts judge_calls_sonnet and Sonnet tokens.
 - 0.6.52: Scoreboard flush relay: a refusal that names an existing one-shot doc in the queue dequeues that row by id (even when a hand-written batch carried different data); deepstats- upserts keep pin-and-retry; bug fix, no new check.
 - 0.6.51: an auto-logged J correction row (and a local store copy) now carries prev_reply (4000), prev_ask (1000) and prev_evidence (the last check_reply evidence for that reply, 2000), so evals can rebuild a replay; absent with no prior reply; no new check.
 - 0.6.50: Scoreboard flush relay no longer stalls: each deepstats- upsert goes as its own call (pinned when its version is known), so one existing row cannot block the batch of one-shot rows.
