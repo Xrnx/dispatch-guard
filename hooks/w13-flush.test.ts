@@ -200,3 +200,18 @@ test('0.6.50 an existing deepstats- doc with no known version cannot block the o
   expect(f.db.get(`corrections/${DS2}`)?.data).toEqual({ prompts: 2 })
   expect(f.mem.corrLog).toEqual([])
 })
+
+// 0.6.52: a hand-written batch (data differs from the queued copy) refused because the doc already exists must still dequeue the row.
+const existsRefusal = (id: string) => `version_mismatch: batch refused, nothing written: write targets corrections/${id}, which already exists, and carried no if_version`
+test('0.6.52 a refusal naming an existing queued one-shot doc dequeues it even when the batch data differs', async ($, on) => {
+  const f = rig(on, { decision: 'ask', down: existsRefusal('hook-W6520000-a') })
+  f.mem.corrLog = [row('hook-W6520000-a', { n: 1 }), row('hook-W6520000-b', { n: 2 })]
+  await $.tool.call({ tool: 'ArtifactData', action: 'batch', url: SCOREBOARD_URL, writes: [{ op: 'set', collection: 'corrections', doc_id: 'hook-W6520000-a', data: { n: 1, hand: true } }] } as any)
+  expect((f.mem.corrLog as any[]).map(q => q.id)).toEqual(['hook-W6520000-b'])
+})
+test('0.6.52 a deepstats- row is not dequeued by an already-exists refusal', async ($, on) => {
+  const f = rig(on, { decision: 'ask', down: existsRefusal(DS) })
+  f.mem.corrLog = [row(DS, { prompts: 3 })]
+  await $.tool.call({ tool: 'ArtifactData', action: 'batch', url: SCOREBOARD_URL, writes: [{ op: 'set', collection: 'corrections', doc_id: DS, data: { prompts: 9 } }] } as any)
+  expect((f.mem.corrLog as any[]).map(q => q.id)).toEqual([DS])
+})
