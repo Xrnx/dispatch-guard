@@ -770,6 +770,46 @@ test('corr-log: no assistant message yet means nothing to correct', async ($, on
   expect(mem.corrLog).toBeUndefined()
 })
 
+// 0.6.51 replay evidence on the auto-logged row: prev_reply (4000), prev_ask (1000), prev_evidence (2000); store copy; absent with no prior reply.
+test('corr-log 0.6.51: row and store carry prev_reply, prev_ask and prev_evidence, each capped', async ($, on) => {
+  const reply = 'R'.repeat(5000)
+  const { mem } = corrEngine(on, 'ask', [{ role: 'user', text: 'Q'.repeat(1500) }, { role: 'assistant', text: reply }, { role: 'tool', text: 'FILE-SECRET' }])
+  mem.checkEvidence = [{ h: replyHash('other'), ev: 'wrong' }, { h: replyHash(reply), ev: 'E'.repeat(3000) }]
+  await $.prompt.submit({ text: 'are you sure' } as any)
+  const d = (mem.corrLog as any[])[0].data
+  expect(d.prev_reply).toBe('R'.repeat(4000))
+  expect(d.prev_ask).toBe('Q'.repeat(1000))
+  expect(d.prev_evidence).toBe('E'.repeat(2000))
+  expect(d.rule).toBe('auto-logged; regex category (low confidence)')
+  const st = (mem.corrReplay as any[])[0]
+  expect(st).toMatchObject({ id: (mem.corrLog as any[])[0].id, prev_reply: d.prev_reply, prev_ask: d.prev_ask, prev_evidence: d.prev_evidence })
+  expect(JSON.stringify([d, st])).not.toContain('FILE-SECRET')
+})
+
+test('corr-log 0.6.51: no check_reply evidence for that reply leaves prev_evidence off', async ($, on) => {
+  const a = corrEngine(on, 'ask')
+  await $.prompt.submit({ text: 'are you sure' } as any)
+  const d = (a.mem.corrLog as any[])[0].data
+  expect(d.prev_reply).toBe('Verified: none.')
+  expect(d.prev_ask).toBe('Stamp duty on shares')
+  expect('prev_evidence' in d).toBe(false)
+})
+
+test('corr-log 0.6.51: a blank prior reply leaves all three fields off and writes no replay record', async ($, on) => {
+  const b = corrEngine(on, 'ask', [{ role: 'user', text: 'where' }, { role: 'assistant', text: '  ' }])
+  await $.prompt.submit({ text: 'are you sure' } as any)
+  const d = (b.mem.corrLog as any[])[0].data
+  expect(['prev_reply', 'prev_ask', 'prev_evidence'].filter(k => k in d)).toEqual([])
+  expect(b.mem.corrReplay).toBeUndefined()
+})
+
+test('check_reply 0.6.51: the evidence is stored against the draft hash, capped at 2000', async ($, on) => {
+  const { mem } = deepEngine(on)
+  await $.turn.start(turn('t1'))
+  await $.tool.call({ tool: CHECK_TOOL, text: CLEAN, evidence: 'x'.repeat(2500) } as any)
+  expect(mem.checkEvidence).toEqual([{ h: replyHash(CLEAN), ev: 'x'.repeat(2000) }])
+})
+
 test('corr-log: a main-thread ArtifactData write flushes the queue', async ($, on) => {
   let decision = 'ask'
   const { mem, calls } = corrEngine(on, () => decision)
@@ -3032,7 +3072,7 @@ test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft pas
   expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
   expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 1, judge_ok: 1, judge_unavailable: 0, tokens_in: 100, tokens_out: 20, tokens_cache: 50 })
   expect(Object.values(d.fail_checks).reduce((a: number, b: any) => a + b, 0)).toBeGreaterThanOrEqual(2) // 0.6.22: the two failed BADC rounds are counted by check id
-  expect(PLUGIN_VERSION).toBe('0.6.49')
+  expect(PLUGIN_VERSION).toBe('0.6.51')
 })
 test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
   const { mem } = deepEngine(on, true)
@@ -4374,10 +4414,10 @@ test('0.6.29 fix d: the first deep J turn on a new version queues one Scoreboard
   await $.turn.complete(end('d2', 'Noted.'))
   const rows = ((mem.corrLog as any[]) ?? []).filter(r => r.collection === 'fixes')
   expect(rows.length).toBe(1)
-  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0649', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.49' } })
+  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0651', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.51' } })
   expect(rows[0].data.detail).toContain(CHANGELOG_LINE)
-  expect(mem[VERSION_ROW_KEY]).toBe('0.6.49')
-  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.49 (auto)')
+  expect(mem[VERSION_ROW_KEY]).toBe('0.6.51')
+  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.51 (auto)')
 })
 
 // 0.6.30 cross-turn bleed (live 13 Nov 12:37-12:39 SGT): rule (d) cited "Are you done with all fixes?" (12:35, answered) against later asks.

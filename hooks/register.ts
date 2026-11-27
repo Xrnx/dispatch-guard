@@ -940,7 +940,7 @@ const NOT_J = /^\s*(<|\[dispatch-guard\]|Another Claude session|Stop hook feedba
 // 0.5.9: judge J's own text, not the raw prompt — the app prepends a <system-reminder> (current date) to J's messages,
 // so a raw-text NOT_J test (leading '<') wrongly read every J message as not-J (night nudge and corr-log never fired).
 export const isJ = (text: string): boolean => { const j = jText(String(text ?? '')); return j !== '' && !NOT_J.test(j) }
-export type CorrRow = { source?: 'J'; date: string; chat: string; words: string; wrong: string; category: string; covered: boolean; rule: string; count: number; auto: true; session: string; triage_conf?: 'low' }
+export type CorrRow = { source?: 'J'; date: string; chat: string; words: string; wrong: string; category: string; covered: boolean; rule: string; count: number; auto: true; session: string; triage_conf?: 'low'; prev_reply?: string; prev_ask?: string; prev_evidence?: string }
 // 0.6.25 write-time category: a regex category is kept as low-confidence triage; only an unclassified row stays in the triage queue.
 export const corrRow = (text: string, session: string, chat: string, now: number): CorrRow => {
   const category = corrCategory(text)
@@ -1292,14 +1292,37 @@ async function cardInChat($: EngineInterface): Promise<boolean> {
     return !Array.isArray(msgs) || msgs.some(m => typeof m.text === 'string' && CARD_SEEN.test(m.text))
   } catch { return true }
 }
+// 0.6.51 replay evidence for an auto-logged correction row: the last visible assistant reply (4000), J's message before it (1000) and the
+// evidence of the last check_reply for that reply (2000, CHECK_EV_KEY). Only reply, ask and evidence text; never file or tool-result text.
+// Kept in the row and in $.store (CORR_REPLAY_KEY) so later evals can rebuild a replay case. Absent when there is no prior reply.
+const CORR_REPLAY_KEY = 'corrReplay'
+const CHECK_EV_KEY = 'checkEvidence'
+const REPLAY_KEEP = 100
+const CHECK_EV_KEEP = 10
+type Replay = { prev_reply?: string; prev_ask?: string; prev_evidence?: string }
+const arr = (v: unknown): any[] => (Array.isArray(v) ? v : [])
+async function replayOf($: EngineInterface, msgs: readonly { role?: string; text?: unknown }[]): Promise<Replay> {
+  let i = msgs.length - 1
+  while (i >= 0 && !(msgs[i].role === 'assistant' && typeof msgs[i].text === 'string' && (msgs[i].text as string).trim() !== '')) i--
+  if (i < 0) return {}
+  const reply = (msgs[i].text as string).trim()
+  const out: Replay = { prev_reply: reply.slice(0, 4000) }
+  const ask = msgs.slice(0, i).reverse().find(m => m.role === 'user' && typeof m.text === 'string' && isJ(m.text))
+  if (ask !== undefined) out.prev_ask = jText(ask.text as string).slice(0, 1000)
+  const ev = [...arr(await $.store.get(CHECK_EV_KEY))].reverse().find(x => x?.h === replyHash(reply))
+  if (typeof ev?.ev === 'string' && ev.ev !== '') out.prev_evidence = ev.ev.slice(0, 2000)
+  return out
+}
 async function corrLog($: EngineInterface, text: string): Promise<boolean> {
   if (!isJ(text) || !correcting(text)) return false
   const msgs = await $.session.messages()
   if (!Array.isArray(msgs) || !msgs.some(m => m.role === 'assistant')) return false // nothing to correct yet
   const chat = jText(msgs.find(m => m.role === 'user' && typeof m.text === 'string' && isJ(m.text))?.text ?? '').split('\n')[0]
   const now = await $.clock.now()
-  const row = { ...corrRow(jText(text), await $.session.id(), chat, now), source: 'J' as const } // 0.6.4: one row per J prompt, tagged J
+  const replay = await replayOf($, msgs).catch(() => ({} as Replay))
+  const row = { ...corrRow(jText(text), await $.session.id(), chat, now), source: 'J' as const, ...replay } // 0.6.4: one row per J prompt, tagged J; 0.6.51: + replay evidence
   await $.store.set(CORR_KEY, [...await corrQueue($), { id: corrId(row, now), data: row }].slice(-CORR_KEEP))
+  if (replay.prev_reply !== undefined) await Promise.resolve().then(async () => $.store.set(CORR_REPLAY_KEY, [...arr(await $.store.get(CORR_REPLAY_KEY)), { id: corrId(row, now), session: row.session, time: sgtIso(now), ...replay }].slice(-REPLAY_KEEP))).catch(() => undefined)
   await corrFlush($).catch(() => 0)
   return true
 }
@@ -2153,7 +2176,7 @@ async function upsertRows($: EngineInterface, rows: { id: string; data: unknown 
 export const STATS_KEY = 'deepStats'
 // 0.6.22: tools whose calls change nothing (left out of the auto-evidence digest).
 export const READ_ONLY_TOOL = /^(?:Read|Glob|Grep|ToolSearch|TaskGet|TaskList|WebSearch|WebFetch)$|(?:^|__)memory_(?:read|list)$/
-export const PLUGIN_VERSION = '0.6.49'
+export const PLUGIN_VERSION = '0.6.51'
 // 0.6.29 version row: this version's CHANGELOG line (tools/build-zip.sh fails unless CHANGELOG.md has "- <PLUGIN_VERSION>: <CHANGELOG_LINE>").
 export const CHANGELOG_LINE = 'a continuation after the Stop unchecked-reply re-check can no longer repeat the reply J already saw: the re-check PASS says end with no text, a send or draft repeating the blocked text is refused, and a leaked repeat is counted in stats.'
 export const FIX_CATEGORY = 'unchecked reply'
@@ -2834,6 +2857,7 @@ export const register: Register = on => {
       const text = String((e as Record<string, unknown>).text ?? '')
       if (e.agentId !== undefined) return { result: `PASS ${replyHash(text)}` } // a subagent never touches the main thread's counts, logs or judge
       if (text.trim() === '') return { result: 'Deep mode: text is empty; pass the full draft reply as text.' }
+      { const ev = String((e as Record<string, unknown>).evidence ?? ''); if (ev.trim() !== '') await Promise.resolve().then(async () => $.store.set(CHECK_EV_KEY, [...arr(await $.store.get(CHECK_EV_KEY)), { h: replyHash(text), ev: ev.slice(0, 2000) }].slice(-CHECK_EV_KEEP))).catch(() => undefined) } // 0.6.51: replay evidence for a later correction row
       if (!sendOk || (await readMode($, mode)) !== 'deep') return { result: `PASS ${replyHash(text)}` }
       const x = e as Record<string, unknown>
       // 0.6.25 evidence-first: the turn's first check_reply is refused once when the draft states current state or answers a correction/re-ask before any evidence call.

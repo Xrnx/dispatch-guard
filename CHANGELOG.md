@@ -2,6 +2,7 @@
 
 One line per version, newest first. Every version bump adds its line here in the same commit. Sources: version comments in hooks/*.ts, README 0.6.x sections, git log. "no record" = no comment, README text or commit names that version.
 
+- 0.6.51: an auto-logged J correction row (and a local store copy) now carries prev_reply (4000), prev_ask (1000) and prev_evidence (the last check_reply evidence for that reply, 2000), so evals can rebuild a replay; absent with no prior reply; no new check.
 - 0.6.50: Scoreboard flush relay no longer stalls: each deepstats- upsert goes as its own call (pinned when its version is known), so one existing row cannot block the batch of one-shot rows.
 - 0.6.49: a continuation after the Stop unchecked-reply re-check can no longer repeat the reply J already saw: the re-check PASS says end with no text, a send or draft repeating the blocked text is refused, and a leaked repeat is counted in stats.
 - 0.6.48: a scheduled-task fire (prompt source schedule_wakeup) now counts as an unattended run: its unchecked replies count apart and the Stop re-check is skipped, only for that prompt, so J chats are unchanged.
