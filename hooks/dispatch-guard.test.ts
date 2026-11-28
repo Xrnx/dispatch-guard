@@ -2025,7 +2025,7 @@ const JUDGE_OK = { isAnswered: true, text: '{"ok":true,"problems":[]}', usage: {
 // 0.6.17: bundled defaults are cap 1 and a 60-word judge floor; most deep tests predate that and run under a pack restoring cap 2 / no floor (legacy = true). New-default tests pass false.
 const LEGACY_PACK = JSON.stringify({ version: BUNDLED_VERSION + 1, checks: { 'deep-cap': { numbers: { cap: 2 } }, 'deep-judge': { numbers: { minWords: 0 } }, 'deep-evidence': { numbers: { sourceGate: 0 } } } }) // gate off: older tests predate the source gate
 const deepEngine = (on: any, legacy: boolean | object = true) => {
-  const judge: { calls: any[]; reply: any } = { calls: [], reply: JUDGE_OK }
+  const judge: { calls: any[]; reply: any; sonnet?: any[] } = { calls: [], reply: JUDGE_OK, sonnet: [] }
   const mem: Record<string, unknown> = {}
   const seen: string[] = []
   on('store.get', (_$: any, e: any) => ({ value: mem[e.key] }))
@@ -2033,7 +2033,15 @@ const deepEngine = (on: any, legacy: boolean | object = true) => {
   const packText = legacy === true ? LEGACY_PACK : typeof legacy === 'object' ? JSON.stringify(legacy) : undefined
   setRules(packText === undefined ? bundledRules() : mergePack(JSON.parse(packText)))
   if (packText !== undefined) on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: packText } })); else noPack(on)
-  on('model.complete', (_$: any, e: any) => { judge.calls.push(e); const r = judge.reply; return { value: typeof r === 'function' ? r(e) : r } })
+  let lastH: any // 0.6.53: the Sonnet call gets Haiku's reply unless a test sets judge.sonnetReply
+  on('model.complete', (_$: any, e: any) => {
+    const sn = e.model === 'claude-sonnet-5-5'
+    if (sn) (judge as any).sonnet.push(e); else judge.calls.push(e)
+    const r = sn && (judge as any).sonnetReply === undefined ? lastH : (sn ? (judge as any).sonnetReply : judge.reply)
+    const v = typeof r === 'function' ? r(e) : r
+    if (!sn) lastH = v
+    return { value: v }
+  })
   const sidBox = { v: 'session-D' }
   on('session.id', () => ({ value: sidBox.v }))
   on('turn.start', (_$: any, e: any) => ({ turnId: e.turnId }))
@@ -3072,7 +3080,7 @@ test('0.6.19 deep-stats: fail -> fail -> pass counts 1 prompt, 0 first-draft pas
   expect(rows[0].id).toBe(`deepstats-session-D-${d.date}`)
   expect(d).toMatchObject({ source: 'deep-stats', session: 'session-D', plugin_version: PLUGIN_VERSION, prompts_judged: 1, first_draft_pass: 0, rounds_total: 3, judge_calls: 1, judge_ok: 1, judge_unavailable: 0, tokens_in: 100, tokens_out: 20, tokens_cache: 50 })
   expect(Object.values(d.fail_checks).reduce((a: number, b: any) => a + b, 0)).toBeGreaterThanOrEqual(2) // 0.6.22: the two failed BADC rounds are counted by check id
-  expect(PLUGIN_VERSION).toBe('0.6.52')
+  expect(PLUGIN_VERSION).toBe('0.6.53')
 })
 test('0.6.19 deep-stats: pass-first counts a first-draft pass; a second prompt upserts the same doc id (one row, set not append)', async ($, on) => {
   const { mem } = deepEngine(on, true)
@@ -3112,7 +3120,7 @@ test('0.6.19 deep-stats: the row has only the listed count fields, no draft/prob
   await $.tool.call(chk(CLEAN))
   await $.turn.complete(end('t1', CLEAN))
   const d = statRows(mem)[0].data
-  expect(Object.keys(d).sort()).toEqual(['attended', 'check_ms_total', 'checker_rounds_ms_total', 'dark_hits', 'dark_samples', 'date', 'fail_checks', 'final_count', 'final_ms_max', 'final_ms_total', 'first_draft_pass', 'first_ms_total', 'judge_calls', 'judge_ms_total', 'judge_ok', 'judge_unavailable', 'lat_ack', 'lat_question', 'lat_task1', 'lat_taskN', 'plugin_version', 'post_first_ms_total', 'prompts_judged', 'reworded_sends', 'rounds_total', 'session', 'session_origin', 'source', 'stopped_by_j', 'tokens_cache', 'tokens_in', 'tokens_out', 'turn_count', 'turn_ms_max', 'turn_ms_total', 'unchecked', 'unchecked_unattended'])
+  expect(Object.keys(d).sort()).toEqual(['attended', 'check_ms_total', 'checker_rounds_ms_total', 'dark_hits', 'dark_samples', 'date', 'fail_checks', 'final_count', 'final_ms_max', 'final_ms_total', 'first_draft_pass', 'first_ms_total', 'judge_calls', 'judge_calls_sonnet', 'judge_ms_total', 'judge_ok', 'judge_unavailable', 'lat_ack', 'lat_question', 'lat_task1', 'lat_taskN', 'plugin_version', 'post_first_ms_total', 'prompts_judged', 'reworded_sends', 'rounds_total', 'session', 'session_origin', 'source', 'stopped_by_j', 'tokens_cache', 'tokens_cache_sonnet', 'tokens_in', 'tokens_in_sonnet', 'tokens_out', 'tokens_out_sonnet', 'turn_count', 'turn_ms_max', 'turn_ms_total', 'unchecked', 'unchecked_unattended'])
   expect(JSON.stringify(statRows(mem))).not.toMatch(/SECRET|Correction|date was wrong/)
   for (const [k, v] of Object.entries(d)) expect(k === 'fail_checks' || k === 'dark_hits' ? Object.values(v as object).every(c => typeof c === 'number') : k === 'dark_samples' ? typeof v === 'object' : k.startsWith('lat_') ? Object.values(v as object).every(c => typeof c === 'number') : typeof v === 'string' ? v.length < 60 : typeof v === 'number').toBe(true)
 })
@@ -4414,10 +4422,10 @@ test('0.6.29 fix d: the first deep J turn on a new version queues one Scoreboard
   await $.turn.complete(end('d2', 'Noted.'))
   const rows = ((mem.corrLog as any[]) ?? []).filter(r => r.collection === 'fixes')
   expect(rows.length).toBe(1)
-  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0652', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.52' } })
+  expect(rows[0]).toMatchObject({ id: 'f-auto-dg0653', collection: 'fixes', data: { status: 'landed', kind: 'hook', plugin_version: '0.6.53' } })
   expect(rows[0].data.detail).toContain(CHANGELOG_LINE)
-  expect(mem[VERSION_ROW_KEY]).toBe('0.6.52')
-  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.52 (auto)')
+  expect(mem[VERSION_ROW_KEY]).toBe('0.6.53')
+  expect(versionRow('2026-11-13', '12:50').data.title).toBe('dispatch-guard 0.6.53 (auto)')
 })
 
 // 0.6.30 cross-turn bleed (live 13 Nov 12:37-12:39 SGT): rule (d) cited "Are you done with all fixes?" (12:35, answered) against later asks.
@@ -4910,4 +4918,53 @@ test('0.6.49 Stop re-check chain: a trailing-line variant of the blocked text fa
   const r2 = await ($ as any).classic.Stop({ stop_hook_active: true, last_assistant_message: T })
   expect(r2.block).toBeUndefined()
   expect(JSON.stringify(mem)).toMatch(/stop-repeat-leak/)
+})
+
+// 0.6.53 C2: Haiku and Sonnet judge in parallel; both flag, or either flags (a)/(b), stands.
+const jr = (...problems: string[]) => ({ isAnswered: true, text: JSON.stringify({ ok: problems.length === 0, problems }), usage: { input_tokens: 7, output_tokens: 3 } })
+const c2 = async ($: any, on: any, h: any, s: any) => {
+  const { mem, judge } = deepEngine(on)
+  judge.reply = h; (judge as any).sonnetReply = s
+  await $.turn.start(turn('t1'))
+  const r = await $.tool.call(chk(CLEAN, { ask: 'status?', evidence: 'ran tests: 12 pass' })) as any
+  return { r: String(r.result), mem, judge }
+}
+test('0.6.53 C2: both models flag (c) -> stands with Sonnet wording', async ($, on) => {
+  const { r, judge } = await c2($, on, jr('(c) haiku wording'), jr('(c) sonnet wording'))
+  expect(r).toMatch(/judge: \(c\) sonnet wording/)
+  expect(r).not.toMatch(/haiku wording/)
+  expect([judge.calls.length, (judge as any).sonnet.length]).toEqual([1, 1])
+})
+test('0.6.53 C2: only Haiku flags (e) -> dropped', async ($, on) => {
+  const { r } = await c2($, on, jr('(e) a claim beyond what was tested'), jr())
+  expect(r).toMatch(/^PASS /)
+})
+test('0.6.53 C2: only Sonnet flags (b) -> stands; its (c) beside it is dropped', async ($, on) => {
+  const { r } = await c2($, on, jr(), jr('(b) unbacked done-claim', '(c) other'))
+  expect(r).toMatch(/judge: \(b\) unbacked done-claim/)
+  expect(r).not.toMatch(/\(c\) other/)
+})
+test('0.6.53 C2: Sonnet error -> Haiku verdict, logged', async ($, on) => {
+  const { r, mem } = await c2($, on, jr('(e) haiku only'), { isAnswered: false })
+  expect(r).toMatch(/judge: \(e\) haiku only/)
+  expect((mem[DENY_LOG_KEY] as any[]).some(x => x.judge === 'sonnet-unavailable')).toBe(true)
+})
+test('0.6.53 C2: Sonnet calls and tokens counted in the deep-stats row', async ($, on) => {
+  const { mem, judge } = deepEngine(on, true)
+  ;(judge as any).sonnetReply = jr()
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  await $.prompt.submit({ text: 'q' } as any)
+  await $.turn.start(turn('t1'))
+  await $.tool.call(chk(CLEAN))
+  await $.turn.complete(end('t1', CLEAN))
+  expect(statRows(mem)[0].data).toMatchObject({ judge_calls: 1, judge_calls_sonnet: 1, tokens_in_sonnet: 7, tokens_out_sonnet: 3 })
+})
+test('0.6.53 C2: both judge calls start before either resolves', async ($, on) => {
+  const { judge } = deepEngine(on)
+  let open = 0, most = 0
+  const slow = async () => { open++; most = Math.max(most, open); await new Promise(r => setTimeout(r, 30)); open--; return jr() }
+  judge.reply = slow; (judge as any).sonnetReply = slow
+  await $.turn.start(turn('t1'))
+  await $.tool.call(chk(CLEAN, { ask: 'status?', evidence: 'ran tests: 12 pass' }))
+  expect(most).toBe(2)
 })
